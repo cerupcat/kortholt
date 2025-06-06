@@ -159,6 +159,7 @@ endif()
 
 add_library(libpd_static STATIC ${SOURCE_FILES})
 add_library(libpd        SHARED ${SOURCE_FILES})
+target_link_options(libpd PRIVATE "-Wl,-z,max-page-size=16384")
 
 # set the output library name for libpd depending on the settings
 set(LIBPD_OUTPUT_NAME     pd)
@@ -202,6 +203,7 @@ set(PD_NATIVE_SOURCES
     libpd/jni/z_jni_plain.c
 )
 add_library(pdnative SHARED ${PD_NATIVE_SOURCES})
+target_link_options(pdnative PRIVATE "-Wl,-z,max-page-size=16384")
 target_include_directories(pdnative PRIVATE libpd/jni libpd/libpd_wrapper/util)
 target_link_libraries(pdnative libpd)
 
@@ -239,6 +241,8 @@ add_library(
     ${DEBUG_UTILS_SOURCES}
     ${APP_SOURCES}
 )
+target_link_options(kortholt PRIVATE "-Wl,-z,max-page-size=16384")
+
 target_include_directories(
     kortholt
     PRIVATE

@@ -15,7 +15,10 @@ android {
         externalNativeBuild {
             cmake {
                 cppFlags("-std=c++14")
-                arguments("-DANDROID_STL=c++_shared")
+                arguments(
+                    "-DANDROID_STL=c++_shared",
+                    "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
+                )
                 abiFilters("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
             }
         }
@@ -56,7 +59,7 @@ dependencies {
 val siteUrl = "https://github.com/simonnorberg/kortholt"
 val gitUrl = "https://github.com/simonnorberg/kortholt.git"
 
-version = "3.3.0"
+version = "3.4.0"
 group = "net.simno.kortholt"
 
 afterEvaluate {
@@ -66,7 +69,7 @@ afterEvaluate {
                 from(components["release"])
                 groupId = "net.simno.kortholt"
                 artifactId = "kortholt"
-                version = "3.3.0"
+                version = "3.4.0"
                 pom {
                     name.set("kortholt")
                     url.set(siteUrl)
