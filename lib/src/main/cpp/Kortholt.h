@@ -25,17 +25,25 @@ public:
             const char *stopBang
     );
 
+    // Message sending functions to Pure Data
+    void sendFloat(const char *dest, float value);
+    void sendBang(const char *dest);
+    void sendSymbol(const char *dest, const char *symbol);
+
 private:
     bool isStream;
     std::mutex streamLock;
-    std::shared_ptr<oboe::AudioStream> stream;
+    std::shared_ptr<oboe::AudioStream> outputStream;  // For tone generation
+    std::shared_ptr<oboe::AudioStream> inputStream;   // For tuner microphone input
     std::shared_ptr<PureDataSource> pureDataSource;
-    std::shared_ptr<LatencyTuningCallback> dataCallback;
+    std::shared_ptr<LatencyTuningCallback> outputCallback;
+    std::shared_ptr<LatencyTuningCallback> inputCallback;
     std::shared_ptr<DefaultErrorCallback> errorCallback;
     int32_t ticksPerBuffer;
     int32_t bufferSize;
 
     oboe::Result createPlaybackStream();
+    oboe::Result createRecordingStream();
 
     void start();
 

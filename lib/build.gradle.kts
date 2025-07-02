@@ -1,17 +1,16 @@
 plugins {
-    alias(libs.plugins.android.library)
-    alias(libs.plugins.kotlin.android)
-    alias(libs.plugins.cachefix)
+    id("com.android.library")
+    id("org.jetbrains.kotlin.android")
     id("maven-publish")
     id("signing")
 }
 
 android {
     namespace = "net.simno.kortholt"
-    compileSdk = libs.versions.compileSdk.get().toInt()
-    ndkVersion = libs.versions.ndk.get()
+    compileSdk = 35
+    ndkVersion = "28.1.13356709"
     defaultConfig {
-        minSdk = libs.versions.minSdk.get().toInt()
+        minSdk = 30
         externalNativeBuild {
             cmake {
                 cppFlags("-std=c++14")
@@ -49,11 +48,11 @@ android {
 }
 
 dependencies {
-    api(libs.coroutines.core)
-    api(libs.androidx.annotation)
-    implementation(libs.androidx.core)
-    implementation(libs.relinker)
-    implementation(libs.zip4j)
+    api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
+    api("androidx.annotation:annotation:1.9.1")
+    implementation("androidx.core:core-ktx:1.16.0")
+    implementation("com.getkeepsafe.relinker:relinker:1.4.5")
+    implementation("net.lingala.zip4j:zip4j:2.11.5")
 }
 
 val siteUrl = "https://github.com/simonnorberg/kortholt"

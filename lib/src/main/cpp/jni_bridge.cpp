@@ -1,6 +1,16 @@
 #include <jni.h>
 #include <oboe/Oboe.h>
+#include <android/log.h>
 #include "Kortholt.h"
+
+#define LOG_TAG "JNI_Bridge"
+// Use Oboe's existing logging macros to avoid redefinition
+#ifndef LOGD
+#define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
+#endif
+#ifndef LOGE
+#define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
+#endif
 
 std::vector<int> convertJavaArrayToVector(
         JNIEnv *env,
@@ -26,8 +36,13 @@ Java_net_simno_kortholt_KortholtPlayer_nativeCreateKortholt(
         jboolean stream
 ) {
     std::vector<int> cpuIds = convertJavaArrayToVector(env, jCpuIds);
+    LOGD("nativeCreateKortholt: stream=%s, cpuIds.size=%zu", stream ? "true" : "false", cpuIds.size());
+    
     auto *kortholt = new(std::nothrow) Kortholt(std::move(cpuIds), stream);
-    return reinterpret_cast<jlong>(kortholt);
+    jlong handle = reinterpret_cast<jlong>(kortholt);
+    
+    LOGD("nativeCreateKortholt: created kortholt handle=%lld", (long long)handle);
+    return handle;
 }
 
 JNIEXPORT void JNICALL
@@ -36,7 +51,9 @@ Java_net_simno_kortholt_KortholtPlayer_nativeDeleteKortholt(
         jobject /*unused*/,
         jlong kortholtHandle
 ) {
+    LOGD("nativeDeleteKortholt: handle=%lld", (long long)kortholtHandle);
     delete reinterpret_cast<Kortholt *>(kortholtHandle);
+    LOGD("nativeDeleteKortholt: deleted");
 }
 
 JNIEXPORT void JNICALL
@@ -46,6 +63,7 @@ Java_net_simno_kortholt_KortholtPlayer_nativeSetDefaultStreamValues(
         jint sampleRate,
         jint framesPerBurst
 ) {
+    LOGD("nativeSetDefaultStreamValues: sampleRate=%d, framesPerBurst=%d", sampleRate, framesPerBurst);
     oboe::DefaultStreamValues::SampleRate = (int32_t) sampleRate;
     oboe::DefaultStreamValues::FramesPerBurst = (int32_t) framesPerBurst;
 }
@@ -73,5 +91,6 @@ Java_net_simno_kortholt_KortholtPlayer_nativeSaveWaveFile(
     }
     return 0;
 }
+
 
 } // extern "C"
