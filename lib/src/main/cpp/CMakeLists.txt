@@ -146,9 +146,6 @@ source_group(libpdutils FILES ${LIBPD_UTILS_SOURCES})
 include_directories(libpd/libpd_wrapper)
 include_directories(libpd/pure-data/src)
 
-# Include directories for externals
-include_directories(${PD_EXTERNALS_PATH}/bandlimited)
-include_directories(${PD_EXTERNALS_PATH}/ntof)
 
 find_package(Threads REQUIRED)
 
@@ -161,8 +158,6 @@ if(PD_EXTRA)
     list(APPEND SOURCE_FILES ${PD_EXTRA_SOURCES})
 endif()
 
-# Add external sources to libpd
-list(APPEND SOURCE_FILES ${PD_EXTERNAL_SOURCES})
 
 add_library(libpd_static STATIC ${SOURCE_FILES})
 add_library(libpd        SHARED ${SOURCE_FILES})
@@ -221,12 +216,59 @@ target_link_libraries(pdnative libpd)
 # Path to externals directory (relative to the CMakeLists.txt file)
 set(PD_EXTERNALS_PATH ../../../../../../jni/pd_externals)
 
-# External sources to be linked into libpd
+# Define external sources to be statically linked into libpd
 set(PD_EXTERNAL_SOURCES
+    externals_setup.c
     ${PD_EXTERNALS_PATH}/bandlimited/bandlimited~.c
     ${PD_EXTERNALS_PATH}/ntof/ntof.c
     ${PD_EXTERNALS_PATH}/ntof/fton.c
+    ${PD_EXTERNALS_PATH}/maxlib/history.c
+    ${PD_EXTERNALS_PATH}/expr/vexp.c
+    ${PD_EXTERNALS_PATH}/expr/vexp_fun.c
+    ${PD_EXTERNALS_PATH}/expr/vexp_if.c
+    ${PD_EXTERNALS_PATH}/helmholtz/src/helmholtz~.cpp
+    ${PD_EXTERNALS_PATH}/helmholtz/src/Helmholtz.cpp
+    ${PD_EXTERNALS_PATH}/abl_link/abl_link~.cpp
+    ${PD_EXTERNALS_PATH}/abl_link/abl_link_instance.cpp
+    ${PD_EXTERNALS_PATH}/abl_link/android-ifaddrs/ifaddrs.cpp
 )
+
+# Add external sources to libpd build
+target_sources(libpd PRIVATE ${PD_EXTERNAL_SOURCES})
+target_sources(libpd_static PRIVATE ${PD_EXTERNAL_SOURCES})
+
+# Add include directories for externals
+target_include_directories(libpd PRIVATE
+    ${PD_EXTERNALS_PATH}/helmholtz/src/include
+    ${PD_EXTERNALS_PATH}/expr
+    ${PD_EXTERNALS_PATH}/abl_link
+    ${PD_EXTERNALS_PATH}/abl_link/link/include
+    ${PD_EXTERNALS_PATH}/abl_link/link/modules/asio-standalone/asio/include
+    ${PD_EXTERNALS_PATH}/abl_link/android-ifaddrs
+)
+target_include_directories(libpd_static PRIVATE
+    ${PD_EXTERNALS_PATH}/helmholtz/src/include
+    ${PD_EXTERNALS_PATH}/expr
+    ${PD_EXTERNALS_PATH}/abl_link
+    ${PD_EXTERNALS_PATH}/abl_link/link/include
+    ${PD_EXTERNALS_PATH}/abl_link/link/modules/asio-standalone/asio/include
+    ${PD_EXTERNALS_PATH}/abl_link/android-ifaddrs
+)
+
+# Add compile definitions for Ableton Link
+target_compile_definitions(libpd PRIVATE
+    LINK_PLATFORM_LINUX=1
+    ASIO_STANDALONE=1
+    ASIO_HAS_STD_CHRONO=1
+)
+target_compile_definitions(libpd_static PRIVATE
+    LINK_PLATFORM_LINUX=1
+    ASIO_STANDALONE=1
+    ASIO_HAS_STD_CHRONO=1
+)
+
+# Suppress warnings for history external
+set_source_files_properties(${PD_EXTERNALS_PATH}/maxlib/history.c PROPERTIES COMPILE_FLAGS -Wno-unused-variable)
 
 ### END PD EXTERNALS ###
 
@@ -272,7 +314,4 @@ target_include_directories(
     libpd/libpd_wrapper/util
 )
 target_link_libraries(kortholt android log libpd oboe)
-
-# Make sure external symbols are available to kortholt
-target_sources(kortholt PRIVATE ${PD_EXTERNAL_SOURCES})
 target_compile_options(kortholt PRIVATE -Wall -Werror -Ofast)

@@ -4,12 +4,9 @@
 #include <cstdio>
 #include <string>
 
-// External setup function declarations
-extern "C" {
-    extern void bandlimited_tilde_setup(void);
-    extern void ntof_setup(void);
-    extern void fton_setup(void);
-}
+// Declare external setup function
+extern "C" void externals_setup(void);
+
 
 #define LOG_TAG "PureDataSource"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
@@ -45,16 +42,12 @@ void PureDataSource::init(int32_t sampleRate, int32_t channelCount) {
         LOGD("Calling pdBase->computeAudio(true)...");
         pdBase->computeAudio(true);
         
-        // Register external setup functions
-        LOGD("Registering external objects...");
-        bandlimited_tilde_setup();
-        LOGD("Registered bandlimited~");
-        ntof_setup();
-        LOGD("Registered ntof");
-        fton_setup();
-        LOGD("Registered fton");
+        // Initialize externals
+        LOGD("Initializing Pure Data externals...");
+        externals_setup();
+        LOGD("Pure Data externals initialized");
         
-        LOGD("Pure Data initialized successfully with externals");
+        LOGD("Pure Data initialized successfully");
         LOGD("Pure Data initialization complete - print receiver active");
         
         // Test the print receiver by sending a message to Pure Data
