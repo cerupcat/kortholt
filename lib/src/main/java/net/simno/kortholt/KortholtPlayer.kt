@@ -12,6 +12,8 @@ import kotlin.time.Duration
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.withContext
 import net.lingala.zip4j.ZipFile
+import org.puredata.core.PdBase
+import org.puredata.core.PdReceiver
 // Using fully qualified names to avoid conflicts
 
 internal class KortholtPlayer(
@@ -25,13 +27,51 @@ internal class KortholtPlayer(
     // Callbacks for receiving messages from Pure Data
     private val floatReceivers = mutableMapOf<String, (Float) -> Unit>()
     private val listReceivers = mutableMapOf<String, (List<Any>) -> Unit>()
-    // TODO: Add receiver implementation once PdBase classes are available
+    private val subscribedSymbols = mutableSetOf<String>()
+    
+    // PdReceiver implementation to handle messages from Pure Data
+    private val pdReceiver = object : PdReceiver.Adapter() {
+        override fun print(s: String) {
+            android.util.Log.d("KortholtPlayer", "PD Print: $s")
+        }
+        
+        override fun receiveFloat(source: String, x: Float) {
+            android.util.Log.d("KortholtPlayer", "Received float from $source: $x")
+            floatReceivers[source]?.invoke(x)
+        }
+        
+        override fun receiveList(source: String, vararg args: Any) {
+            android.util.Log.d("KortholtPlayer", "Received list from $source: ${args.toList()}")
+            listReceivers[source]?.invoke(args.toList())
+        }
+        
+        override fun receiveBang(source: String) {
+            android.util.Log.d("KortholtPlayer", "Received bang from $source")
+            // Treat bang as a float with value 1.0
+            floatReceivers[source]?.invoke(1.0f)
+        }
+        
+        override fun receiveSymbol(source: String, symbol: String) {
+            android.util.Log.d("KortholtPlayer", "Received symbol from $source: $symbol")
+            // Treat symbol as a list with the symbol as the only element
+            listReceivers[source]?.invoke(listOf(symbol))
+        }
+        
+        override fun receiveMessage(source: String, symbol: String, vararg args: Any) {
+            android.util.Log.d("KortholtPlayer", "Received message from $source ($symbol): ${args.toList()}")
+            // Treat message as a list with symbol + args
+            listReceivers[source]?.invoke(listOf(symbol) + args.toList())
+        }
+    }
 
     init {
         ReLinker.loadLibrary(context, "pd", VERSION)
         ReLinker.loadLibrary(context, "pdnative", VERSION)
         ReLinker.loadLibrary(context, "kortholt", VERSION)
-        // TODO: Set up PdReceiver once classes are available
+        
+        // Set up PdReceiver to handle messages from Pure Data
+        PdBase.setReceiver(pdReceiver)
+        android.util.Log.d("KortholtPlayer", "PdReceiver initialized")
     }
 
     override suspend fun openPatch(
@@ -57,21 +97,22 @@ internal class KortholtPlayer(
                     zip.delete()
                     
                     // Add the cache directory to Pure Data search path for extracted files
-                    nativeAddToSearchPath(handle, dir.absolutePath)
+                    PdBase.addToSearchPath(dir.absolutePath)
                 } else {
                     patchFile.outputStream().use { output -> input.copyTo(output) }
                 }
                 
                 if (patchFile.exists()) {
-                    val patchBaseName = patchName.substringBeforeLast('.')
-                    val success = nativeOpenPatch(handle, patchBaseName + ".pd", dir.absolutePath)
-                    if (success) {
-                        patchHandle.set(1L) // Mark as opened
-                        android.util.Log.d("KortholtPlayer", "Patch opened successfully: $patchName")
-                    } else {
-                        android.util.Log.e("KortholtPlayer", "Failed to open patch: $patchName")
+                    try {
+                        // Use PdBase to open the patch and get a handle
+                        val pdHandle = PdBase.openPatch(patchFile)
+                        patchHandle.set(pdHandle.toLong())
+                        android.util.Log.d("KortholtPlayer", "Patch opened successfully: $patchName (handle=$pdHandle)")
+                        true
+                    } catch (e: Exception) {
+                        android.util.Log.e("KortholtPlayer", "Failed to open patch: $patchName", e)
+                        false
                     }
-                    success
                 } else {
                     android.util.Log.e("KortholtPlayer", "Patch file not found: ${patchFile.absolutePath}")
                     false
@@ -82,9 +123,9 @@ internal class KortholtPlayer(
 
     override suspend fun closePatch() = withContext(dispatcher) {
         runCatching {
-            patchHandle.getAndSet(NOT_SET).takeIf { it != NOT_SET }?.let { 
-                // TODO: Close patch once PdBase is available
-                android.util.Log.d("KortholtPlayer", "Closing patch")
+            patchHandle.getAndSet(NOT_SET).takeIf { it != NOT_SET }?.let { handle ->
+                PdBase.closePatch(handle.toInt())
+                android.util.Log.d("KortholtPlayer", "Closed patch (handle=${handle.toInt()})")
             }
         }.isSuccess
     }
@@ -108,7 +149,8 @@ internal class KortholtPlayer(
     override fun sendBang(receiver: String) {
         val handle = kortholtHandle.get()
         if (handle != NOT_SET) {
-            nativeSendBang(handle, receiver)
+            val result = PdBase.sendBang(receiver)
+            android.util.Log.d("KortholtPlayer", "Sent bang to '$receiver': result=$result")
         } else {
             android.util.Log.w("KortholtPlayer", "Cannot send bang to $receiver: stream not started")
         }
@@ -117,7 +159,8 @@ internal class KortholtPlayer(
     override fun sendFloat(receiver: String, x: Float) {
         val handle = kortholtHandle.get()
         if (handle != NOT_SET) {
-            nativeSendFloat(handle, receiver, x)
+            val result = PdBase.sendFloat(receiver, x)
+            android.util.Log.d("KortholtPlayer", "Sent float to '$receiver': $x (result=$result)")
         } else {
             android.util.Log.w("KortholtPlayer", "Cannot send float to $receiver: stream not started")
         }
@@ -126,16 +169,8 @@ internal class KortholtPlayer(
     override fun sendList(receiver: String, vararg args: Any) {
         val handle = kortholtHandle.get()
         if (handle != NOT_SET) {
-            // For now, convert each arg to individual sends rather than implementing full list support
-            args.forEach { arg ->
-                when (arg) {
-                    is Float -> nativeSendFloat(handle, receiver, arg)
-                    is Double -> nativeSendFloat(handle, receiver, arg.toFloat())
-                    is Int -> nativeSendFloat(handle, receiver, arg.toFloat())
-                    is String -> nativeSendSymbol(handle, receiver, arg)
-                    else -> nativeSendSymbol(handle, receiver, arg.toString())
-                }
-            }
+            val result = PdBase.sendList(receiver, *args)
+            android.util.Log.d("KortholtPlayer", "Sent list to '$receiver': ${args.toList()} (result=$result)")
         } else {
             android.util.Log.w("KortholtPlayer", "Cannot send list to $receiver: stream not started")
         }
@@ -145,22 +180,39 @@ internal class KortholtPlayer(
         android.util.Log.d("KortholtPlayer", "Setting float receiver for: $receiver")
         floatReceivers[receiver] = callback
         
-        // TODO: Implement PdListener once classes are available
+        // Subscribe to the symbol in Pure Data if not already subscribed
+        if (subscribedSymbols.add(receiver)) {
+            val result = PdBase.subscribe(receiver)
+            android.util.Log.d("KortholtPlayer", "Subscribed to '$receiver': result=$result")
+        }
     }
 
     override fun setListReceiver(receiver: String, callback: (List<Any>) -> Unit) {
         android.util.Log.d("KortholtPlayer", "Setting list receiver for: $receiver")
         listReceivers[receiver] = callback
         
-        // TODO: Implement PdListener once classes are available
+        // Subscribe to the symbol in Pure Data if not already subscribed
+        if (subscribedSymbols.add(receiver)) {
+            val result = PdBase.subscribe(receiver)
+            android.util.Log.d("KortholtPlayer", "Subscribed to '$receiver': result=$result")
+        }
     }
 
     override fun removeReceiver(receiver: String) {
         android.util.Log.d("KortholtPlayer", "Removing receiver for: $receiver")
-        floatReceivers.remove(receiver)
-        listReceivers.remove(receiver)
+        val hadFloatReceiver = floatReceivers.remove(receiver) != null
+        val hadListReceiver = listReceivers.remove(receiver) != null
         
-        // TODO: Remove PdListener once classes are available
+        // Only unsubscribe if we had receivers and now have none for this symbol
+        if ((hadFloatReceiver || hadListReceiver) && 
+            !floatReceivers.containsKey(receiver) && 
+            !listReceivers.containsKey(receiver)) {
+            
+            if (subscribedSymbols.remove(receiver)) {
+                PdBase.unsubscribe(receiver)
+                android.util.Log.d("KortholtPlayer", "Unsubscribed from '$receiver'")
+            }
+        }
     }
 
     @ExperimentalWaveFile
@@ -206,11 +258,6 @@ internal class KortholtPlayer(
         startBang: String,
         stopBang: String
     ): Int
-    private external fun nativeSendBang(kortholtHandle: Long, receiver: String)
-    private external fun nativeSendFloat(kortholtHandle: Long, receiver: String, value: Float)
-    private external fun nativeSendSymbol(kortholtHandle: Long, receiver: String, symbol: String)
-    private external fun nativeOpenPatch(kortholtHandle: Long, patch: String, path: String): Boolean
-    private external fun nativeAddToSearchPath(kortholtHandle: Long, path: String)
 
     companion object {
         private const val NOT_SET = -1L
