@@ -3,6 +3,7 @@
 
 #include <IRenderableAudio.h>
 #include <PdBase.hpp>
+#include <jni.h>
 
 class PureDataSource : public IRenderableAudio {
 public:
@@ -20,11 +21,14 @@ public:
     
     bool openPatch(const char *patch, const char *path);
     void addToSearchPath(const char *path);
+    
+    // JNI bridge setup
+    void setJavaReceiver(JavaVM* jvm, jobject receiver);
 
 private:
     int32_t ticksPerBuffer;
     std::shared_ptr<pd::PdBase> pdBase;
-    std::shared_ptr<pd::PdReceiver> printReceiver;
+    std::shared_ptr<pd::PdReceiver> bridgedReceiver;
 };
 
 #endif //PUREDATASOURCE_H
