@@ -23,6 +23,10 @@ internal class KortholtPlayer(
     private val patchHandle = AtomicLong(NOT_SET)
     private val kortholtHandle = AtomicLong(NOT_SET)
 
+    // Callbacks for receiving messages from Pure Data (stub implementation for now)
+    private val floatReceivers = mutableMapOf<String, (Float) -> Unit>()
+    private val listReceivers = mutableMapOf<String, (List<Any>) -> Unit>()
+
     init {
         ReLinker.loadLibrary(context, "pd", VERSION)
         ReLinker.loadLibrary(context, "pdnative", VERSION)
@@ -52,7 +56,6 @@ internal class KortholtPlayer(
                 if (patchFile.exists()) {
                     patchHandle.set(pdBase.openFile(patchFile.name, patchFile.parentFile?.absolutePath ?: "."))
                 }
-                patchFile.delete()
             }
         }.isSuccess
     }
@@ -89,6 +92,25 @@ internal class KortholtPlayer(
 
     override fun sendList(receiver: String, vararg args: Any) {
         pdBase.sendList(receiver, *args)
+    }
+
+    override fun setFloatReceiver(receiver: String, callback: (Float) -> Unit) {
+        android.util.Log.d("KortholtPlayer", "Setting float receiver for: $receiver (stub implementation)")
+        floatReceivers[receiver] = callback
+        // TODO: Implement actual receiver registration with PdBase
+    }
+
+    override fun setListReceiver(receiver: String, callback: (List<Any>) -> Unit) {
+        android.util.Log.d("KortholtPlayer", "Setting list receiver for: $receiver (stub implementation)")
+        listReceivers[receiver] = callback
+        // TODO: Implement actual receiver registration with PdBase
+    }
+
+    override fun removeReceiver(receiver: String) {
+        android.util.Log.d("KortholtPlayer", "Removing receiver for: $receiver (stub implementation)")
+        floatReceivers.remove(receiver)
+        listReceivers.remove(receiver)
+        // TODO: Implement actual receiver removal with PdBase
     }
 
     @ExperimentalWaveFile

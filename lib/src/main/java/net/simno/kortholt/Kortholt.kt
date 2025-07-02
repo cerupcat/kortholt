@@ -62,6 +62,11 @@ object Kortholt {
         fun sendBang(receiver: String)
         fun sendFloat(receiver: String, x: Float)
         fun sendList(receiver: String, vararg args: Any)
+        
+        // Message receiving from Pure Data
+        fun setFloatReceiver(receiver: String, callback: (Float) -> Unit)
+        fun setListReceiver(receiver: String, callback: (List<Any>) -> Unit)
+        fun removeReceiver(receiver: String)
 
         @ExperimentalWaveFile
         suspend fun saveWaveFile(
