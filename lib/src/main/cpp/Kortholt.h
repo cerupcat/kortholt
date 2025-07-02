@@ -29,6 +29,10 @@ public:
     void sendFloat(const char *dest, float value);
     void sendBang(const char *dest);
     void sendSymbol(const char *dest, const char *symbol);
+    
+    // Patch management functions
+    bool openPatch(const char *patch, const char *path);
+    void addToSearchPath(const char *path);
 
 private:
     bool isStream;

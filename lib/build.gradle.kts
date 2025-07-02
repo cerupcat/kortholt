@@ -22,6 +22,11 @@ android {
             }
         }
     }
+    sourceSets {
+        getByName("main") {
+            java.srcDirs("src/main/cpp/libpd/java")
+        }
+    }
     externalNativeBuild {
         cmake {
             path("src/main/cpp/CMakeLists.txt")

@@ -3,6 +3,7 @@
 #include <cmath>
 #include <fstream>
 #include <android/log.h>
+#include <jni.h>
 #include "Kortholt.h"
 
 #define LOG_TAG "Kortholt"
@@ -312,6 +313,116 @@ void Kortholt::sendSymbol(const char *dest, const char *symbol) {
     } else {
         LOGE("sendSymbol: pureDataSource is null");
     }
+}
+
+bool Kortholt::openPatch(const char *patch, const char *path) {
+    LOGD("openPatch: patch=%s, path=%s", patch, path);
+    if (pureDataSource) {
+        return pureDataSource->openPatch(patch, path);
+    } else {
+        LOGE("openPatch: pureDataSource is null");
+        return false;
+    }
+}
+
+void Kortholt::addToSearchPath(const char *path) {
+    LOGD("addToSearchPath: path=%s", path);
+    if (pureDataSource) {
+        pureDataSource->addToSearchPath(path);
+    } else {
+        LOGE("addToSearchPath: pureDataSource is null");
+    }
+}
+
+// JNI bridge functions for Kotlin access
+extern "C" {
+
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeSendBang(JNIEnv *env, jobject instance, jlong kortholtHandle, jstring receiver) {
+    if (kortholtHandle == -1) {
+        LOGE("nativeSendBang: Invalid kortholt handle");
+        return;
+    }
+    
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    const char *receiverStr = env->GetStringUTFChars(receiver, nullptr);
+    
+    LOGD("nativeSendBang: Calling kortholt->sendBang(%s)", receiverStr);
+    kortholt->sendBang(receiverStr);
+    
+    env->ReleaseStringUTFChars(receiver, receiverStr);
+}
+
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeSendFloat(JNIEnv *env, jobject instance, jlong kortholtHandle, jstring receiver, jfloat value) {
+    if (kortholtHandle == -1) {
+        LOGE("nativeSendFloat: Invalid kortholt handle");
+        return;
+    }
+    
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    const char *receiverStr = env->GetStringUTFChars(receiver, nullptr);
+    
+    LOGD("nativeSendFloat: Calling kortholt->sendFloat(%s, %.3f)", receiverStr, value);
+    kortholt->sendFloat(receiverStr, value);
+    
+    env->ReleaseStringUTFChars(receiver, receiverStr);
+}
+
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeSendSymbol(JNIEnv *env, jobject instance, jlong kortholtHandle, jstring receiver, jstring symbol) {
+    if (kortholtHandle == -1) {
+        LOGE("nativeSendSymbol: Invalid kortholt handle");
+        return;
+    }
+    
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    const char *receiverStr = env->GetStringUTFChars(receiver, nullptr);
+    const char *symbolStr = env->GetStringUTFChars(symbol, nullptr);
+    
+    LOGD("nativeSendSymbol: Calling kortholt->sendSymbol(%s, %s)", receiverStr, symbolStr);
+    kortholt->sendSymbol(receiverStr, symbolStr);
+    
+    env->ReleaseStringUTFChars(receiver, receiverStr);
+    env->ReleaseStringUTFChars(symbol, symbolStr);
+}
+
+JNIEXPORT jboolean JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeOpenPatch(JNIEnv *env, jobject instance, jlong kortholtHandle, jstring patch, jstring path) {
+    if (kortholtHandle == -1) {
+        LOGE("nativeOpenPatch: Invalid kortholt handle");
+        return false;
+    }
+    
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    const char *patchStr = env->GetStringUTFChars(patch, nullptr);
+    const char *pathStr = env->GetStringUTFChars(path, nullptr);
+    
+    LOGD("nativeOpenPatch: Calling kortholt->openPatch(%s, %s)", patchStr, pathStr);
+    bool result = kortholt->openPatch(patchStr, pathStr);
+    
+    env->ReleaseStringUTFChars(patch, patchStr);
+    env->ReleaseStringUTFChars(path, pathStr);
+    
+    return result;
+}
+
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeAddToSearchPath(JNIEnv *env, jobject instance, jlong kortholtHandle, jstring path) {
+    if (kortholtHandle == -1) {
+        LOGE("nativeAddToSearchPath: Invalid kortholt handle");
+        return;
+    }
+    
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    const char *pathStr = env->GetStringUTFChars(path, nullptr);
+    
+    LOGD("nativeAddToSearchPath: Calling kortholt->addToSearchPath(%s)", pathStr);
+    kortholt->addToSearchPath(pathStr);
+    
+    env->ReleaseStringUTFChars(path, pathStr);
+}
+
 }
 
 

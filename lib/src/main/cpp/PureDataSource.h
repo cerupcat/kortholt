@@ -17,6 +17,9 @@ public:
     void sendBang(const char *dest);
     void sendFloat(const char *dest, float value);
     void sendSymbol(const char *dest, const char *symbol);
+    
+    bool openPatch(const char *patch, const char *path);
+    void addToSearchPath(const char *path);
 
 private:
     int32_t ticksPerBuffer;

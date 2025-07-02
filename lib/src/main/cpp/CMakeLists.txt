@@ -146,6 +146,10 @@ source_group(libpdutils FILES ${LIBPD_UTILS_SOURCES})
 include_directories(libpd/libpd_wrapper)
 include_directories(libpd/pure-data/src)
 
+# Include directories for externals
+include_directories(${PD_EXTERNALS_PATH}/bandlimited)
+include_directories(${PD_EXTERNALS_PATH}/ntof)
+
 find_package(Threads REQUIRED)
 
 # create final list of source files
@@ -156,6 +160,9 @@ endif()
 if(PD_EXTRA)
     list(APPEND SOURCE_FILES ${PD_EXTRA_SOURCES})
 endif()
+
+# Add external sources to libpd
+list(APPEND SOURCE_FILES ${PD_EXTERNAL_SOURCES})
 
 add_library(libpd_static STATIC ${SOURCE_FILES})
 add_library(libpd        SHARED ${SOURCE_FILES})
@@ -212,47 +219,14 @@ target_link_libraries(pdnative libpd)
 ### BEGIN PD EXTERNALS ###
 
 # Path to externals directory (relative to the CMakeLists.txt file)
-set(PD_EXTERNALS_PATH ../../../../../../pd_externals)
+set(PD_EXTERNALS_PATH ../../../../../../jni/pd_externals)
 
-# BANDLIMITED EXTERNAL
-add_library(bandlimited_tilde SHARED
+# External sources to be linked into libpd
+set(PD_EXTERNAL_SOURCES
     ${PD_EXTERNALS_PATH}/bandlimited/bandlimited~.c
-)
-target_include_directories(bandlimited_tilde PRIVATE libpd/pure-data/src)
-target_compile_definitions(bandlimited_tilde PRIVATE -DANDROID=1 -DPD=1)
-target_compile_options(bandlimited_tilde PRIVATE -Ofast)
-target_link_libraries(bandlimited_tilde libpd)
-target_link_options(bandlimited_tilde PRIVATE "-Wl,-z,max-page-size=16384")
-
-# NTOF EXTERNAL (Note to frequency)
-add_library(ntof SHARED
     ${PD_EXTERNALS_PATH}/ntof/ntof.c
-)
-target_include_directories(ntof PRIVATE libpd/pure-data/src)
-target_compile_definitions(ntof PRIVATE -DANDROID=1 -DPD=1)
-target_compile_options(ntof PRIVATE -Ofast)
-target_link_libraries(ntof libpd)
-target_link_options(ntof PRIVATE "-Wl,-z,max-page-size=16384")
-
-# FTON EXTERNAL (Frequency to note)
-add_library(fton SHARED
     ${PD_EXTERNALS_PATH}/ntof/fton.c
 )
-target_include_directories(fton PRIVATE libpd/pure-data/src)
-target_compile_definitions(fton PRIVATE -DANDROID=1 -DPD=1)
-target_compile_options(fton PRIVATE -Ofast)
-target_link_libraries(fton libpd)
-target_link_options(fton PRIVATE "-Wl,-z,max-page-size=16384")
-
-# HISTORY EXTERNAL (Maxlib)
-add_library(history SHARED
-    ${PD_EXTERNALS_PATH}/maxlib/history.c
-)
-target_include_directories(history PRIVATE libpd/pure-data/src)
-target_compile_definitions(history PRIVATE -DANDROID=1 -DPD=1)
-target_compile_options(history PRIVATE -Ofast)
-target_link_libraries(history libpd)
-target_link_options(history PRIVATE "-Wl,-z,max-page-size=16384")
 
 ### END PD EXTERNALS ###
 
@@ -298,4 +272,7 @@ target_include_directories(
     libpd/libpd_wrapper/util
 )
 target_link_libraries(kortholt android log libpd oboe)
+
+# Make sure external symbols are available to kortholt
+target_sources(kortholt PRIVATE ${PD_EXTERNAL_SOURCES})
 target_compile_options(kortholt PRIVATE -Wall -Werror -Ofast)

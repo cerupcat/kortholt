@@ -4,6 +4,13 @@
 #include <cstdio>
 #include <string>
 
+// External setup function declarations
+extern "C" {
+    extern void bandlimited_tilde_setup(void);
+    extern void ntof_setup(void);
+    extern void fton_setup(void);
+}
+
 #define LOG_TAG "PureDataSource"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
@@ -37,7 +44,17 @@ void PureDataSource::init(int32_t sampleRate, int32_t channelCount) {
     if (initResult) {
         LOGD("Calling pdBase->computeAudio(true)...");
         pdBase->computeAudio(true);
-        LOGD("Pure Data initialized successfully");
+        
+        // Register external setup functions
+        LOGD("Registering external objects...");
+        bandlimited_tilde_setup();
+        LOGD("Registered bandlimited~");
+        ntof_setup();
+        LOGD("Registered ntof");
+        fton_setup();
+        LOGD("Registered fton");
+        
+        LOGD("Pure Data initialized successfully with externals");
         LOGD("Pure Data initialization complete - print receiver active");
         
         // Test the print receiver by sending a message to Pure Data
@@ -106,6 +123,25 @@ void PureDataSource::sendFloat(const char *dest, float value) {
 
 void PureDataSource::sendSymbol(const char *dest, const char *symbol) {
     pdBase->sendSymbol(dest, symbol);
+}
+
+bool PureDataSource::openPatch(const char *patch, const char *path) {
+    LOGD("openPatch: patch=%s, path=%s", patch, path);
+    
+    pd::Patch patchHandle = pdBase->openPatch(patch, path);
+    bool success = patchHandle.isValid();
+    
+    LOGD("openPatch result: %s", success ? "SUCCESS" : "FAILED");
+    if (success) {
+        LOGD("Patch opened with dollarZero: %d", patchHandle.dollarZero());
+    }
+    
+    return success;
+}
+
+void PureDataSource::addToSearchPath(const char *path) {
+    LOGD("addToSearchPath: path=%s", path);
+    pdBase->addToSearchPath(path);
 }
 
 
