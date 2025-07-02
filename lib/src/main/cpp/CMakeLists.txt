@@ -209,6 +209,53 @@ target_link_libraries(pdnative libpd)
 
 ### END INCLUDE LIBPD ###
 
+### BEGIN PD EXTERNALS ###
+
+# Path to externals directory (relative to the CMakeLists.txt file)
+set(PD_EXTERNALS_PATH ../../../../../../pd_externals)
+
+# BANDLIMITED EXTERNAL
+add_library(bandlimited_tilde SHARED
+    ${PD_EXTERNALS_PATH}/bandlimited/bandlimited~.c
+)
+target_include_directories(bandlimited_tilde PRIVATE libpd/pure-data/src)
+target_compile_definitions(bandlimited_tilde PRIVATE -DANDROID=1 -DPD=1)
+target_compile_options(bandlimited_tilde PRIVATE -Ofast)
+target_link_libraries(bandlimited_tilde libpd)
+target_link_options(bandlimited_tilde PRIVATE "-Wl,-z,max-page-size=16384")
+
+# NTOF EXTERNAL (Note to frequency)
+add_library(ntof SHARED
+    ${PD_EXTERNALS_PATH}/ntof/ntof.c
+)
+target_include_directories(ntof PRIVATE libpd/pure-data/src)
+target_compile_definitions(ntof PRIVATE -DANDROID=1 -DPD=1)
+target_compile_options(ntof PRIVATE -Ofast)
+target_link_libraries(ntof libpd)
+target_link_options(ntof PRIVATE "-Wl,-z,max-page-size=16384")
+
+# FTON EXTERNAL (Frequency to note)
+add_library(fton SHARED
+    ${PD_EXTERNALS_PATH}/ntof/fton.c
+)
+target_include_directories(fton PRIVATE libpd/pure-data/src)
+target_compile_definitions(fton PRIVATE -DANDROID=1 -DPD=1)
+target_compile_options(fton PRIVATE -Ofast)
+target_link_libraries(fton libpd)
+target_link_options(fton PRIVATE "-Wl,-z,max-page-size=16384")
+
+# HISTORY EXTERNAL (Maxlib)
+add_library(history SHARED
+    ${PD_EXTERNALS_PATH}/maxlib/history.c
+)
+target_include_directories(history PRIVATE libpd/pure-data/src)
+target_compile_definitions(history PRIVATE -DANDROID=1 -DPD=1)
+target_compile_options(history PRIVATE -Ofast)
+target_link_libraries(history libpd)
+target_link_options(history PRIVATE "-Wl,-z,max-page-size=16384")
+
+### END PD EXTERNALS ###
+
 ### BEGIN INCLUDE OBOE ###
 
 set(OBOE_DIR ./oboe)
