@@ -294,6 +294,7 @@ include_directories(${DEBUG_UTILS_PATH})
 set(APP_SOURCES
     jni_bridge.cpp
     PureDataSource.cpp
+    PureDataInputSource.cpp
     Kortholt.cpp
     ${OBOE_DIR}/samples/hello-oboe/src/main/cpp/LatencyTuningCallback.cpp
     ${OBOE_DIR}/apps/OboeTester/app/src/main/cpp/util/WaveFileWriter.cpp

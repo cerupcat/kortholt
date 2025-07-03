@@ -1,4 +1,5 @@
 #include "PureDataSource.h"
+#include "PureDataInputSource.h"
 #include <android/log.h>
 #include <cstring>
 #include <memory>
@@ -13,25 +14,33 @@
 
 extern "C" void externals_setup(void);
 
-PureDataSource::PureDataSource(int32_t ticksPerBuffer) {
-    this->ticksPerBuffer = ticksPerBuffer;
+PureDataSource::PureDataSource(int32_t ticksPerBuffer) :
+    ticksPerBuffer(ticksPerBuffer),
+    inputChannels(0),
+    outputChannels(2),
+    inputSource(nullptr) {
     // No longer create separate pd::PdBase instance - use global libpd
     LOGD("PureDataSource created to use global libpd instance");
 }
 
 void PureDataSource::init(int32_t sampleRate, int32_t channelCount) {
-    LOGD("Initializing Pure Data: sampleRate=%d, channelCount=%d, ticksPerBuffer=%d", 
-         sampleRate, channelCount, ticksPerBuffer);
+    std::lock_guard<std::mutex> lock(processingMutex);
     
-    // Initialize libpd's audio processing system
+    LOGD("Initializing Pure Data: sampleRate=%d, channelCount=%d (output), inputChannels=%d, ticksPerBuffer=%d", 
+         sampleRate, channelCount, inputChannels, ticksPerBuffer);
+    
+    outputChannels = channelCount;
+    
+    // Initialize libpd's audio processing system with input and output channels
     // This is required for libpd_process_float to work properly
     LOGD("Initializing libpd audio processing system...");
-    int initResult = libpd_init_audio(0, channelCount, sampleRate);
+    int initResult = libpd_init_audio(inputChannels, outputChannels, sampleRate);
     if (initResult != 0) {
         LOGE("Failed to initialize libpd audio system: %d", initResult);
         return;
     }
-    LOGD("libpd audio system initialized successfully");
+    LOGD("libpd audio system initialized successfully with %d input and %d output channels", 
+         inputChannels, outputChannels);
     
     // Enable DSP computation using the correct libpd message system
     // This is equivalent to [; pd dsp 1(
@@ -49,10 +58,49 @@ void PureDataSource::init(int32_t sampleRate, int32_t channelCount) {
     LOGD("PureDataSource initialization complete");
 }
 
+void PureDataSource::setInputChannels(int32_t channels) {
+    std::lock_guard<std::mutex> lock(processingMutex);
+    inputChannels = channels;
+    LOGD("Input channels set to %d", inputChannels);
+}
+
+void PureDataSource::setInputSource(std::shared_ptr<PureDataInputSource> source) {
+    std::lock_guard<std::mutex> lock(processingMutex);
+    inputSource = source;
+    LOGD("Input source set");
+}
+
 void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
-    // Process audio using global libpd
+    // Process audio using global libpd - output only (for tone generation)
     int ticks = numFrames / libpd_blocksize();
-    libpd_process_float(ticks, nullptr, audioData);
+    
+    // Prepare input buffer
+    float* inputBuffer = nullptr;
+    if (inputChannels > 0 && inputSource) {
+        inputBuffer = new float[numFrames * inputChannels];
+        inputSource->getInputAudio(inputBuffer, numFrames);
+    }
+    
+    // Process with Pure Data
+    libpd_process_float(ticks, inputBuffer, audioData);
+    
+    // Clean up
+    if (inputBuffer) {
+        delete[] inputBuffer;
+    }
+    
+    LOGD("renderAudio: processed %d frames (%d ticks) with %s input", 
+         numFrames, ticks, inputBuffer ? "microphone" : "no");
+}
+
+void PureDataSource::processAudio(float *inputData, float *outputData, int32_t numFrames) {
+    std::lock_guard<std::mutex> lock(processingMutex);
+    
+    // Process audio using global libpd with both input and output
+    int ticks = numFrames / libpd_blocksize();
+    libpd_process_float(ticks, inputData, outputData);
+    
+    LOGD("processAudio: processed %d frames (%d ticks) with full duplex", numFrames, ticks);
 }
 
 void PureDataSource::sendFloat(const char *dest, float value) {

@@ -48,6 +48,7 @@ Kortholt::Kortholt(std::vector<int> cpuIds, bool stream) {
     LOGD("Kortholt constructor: CPU cores count=%zu", cpuIds.size());
     
     pureDataSource = std::make_shared<PureDataSource>(ticksPerBuffer);
+    pureDataInputSource = std::make_shared<PureDataInputSource>(ticksPerBuffer);
     errorCallback = std::make_shared<DefaultErrorCallback>(*this);
     outputCallback = std::make_shared<LatencyTuningCallback>();
     inputCallback = std::make_shared<LatencyTuningCallback>();
@@ -189,8 +190,15 @@ void Kortholt::start() {
         if (inputResult == oboe::Result::OK) {
             LOGD("start: Both streams created successfully, initializing Pure Data");
             
+            // Configure Pure Data with input channel count and set input source
+            pureDataSource->setInputChannels(inputStream->getChannelCount());
+            pureDataSource->setInputSource(pureDataInputSource);
+            
             // Initialize Pure Data with output stream settings
             pureDataSource->init(outputStream->getSampleRate(), outputStream->getChannelCount());
+            
+            // Initialize input source with input stream settings
+            pureDataInputSource->init(inputStream->getSampleRate(), inputStream->getChannelCount());
             
             if (isStream) {
                 LOGD("start: Configuring streams for real-time audio");
@@ -200,9 +208,9 @@ void Kortholt::start() {
                 outputCallback->setSource(pureDataSource);
                 outputStream->setBufferSizeInFrames(bufferSize);
                 
-                // Configure input stream - TODO: set source for input processing
+                // Configure input stream with input audio source
                 inputCallback->reset();
-                // inputCallback->setSource(inputAudioSource); // Future: implement input audio source
+                inputCallback->setSource(pureDataInputSource);
                 inputStream->setBufferSizeInFrames(bufferSize);
                 
                 // Start both streams

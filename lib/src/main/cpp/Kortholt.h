@@ -8,6 +8,7 @@
 #include <LatencyTuningCallback.h>
 #include <WaveFileWriter.h>
 #include "PureDataSource.h"
+#include "PureDataInputSource.h"
 
 class Kortholt : public IRestartable {
 
@@ -40,6 +41,7 @@ private:
     std::shared_ptr<oboe::AudioStream> outputStream;  // For tone generation
     std::shared_ptr<oboe::AudioStream> inputStream;   // For tuner microphone input
     std::shared_ptr<PureDataSource> pureDataSource;
+    std::shared_ptr<PureDataInputSource> pureDataInputSource;
     std::shared_ptr<LatencyTuningCallback> outputCallback;
     std::shared_ptr<LatencyTuningCallback> inputCallback;
     std::shared_ptr<DefaultErrorCallback> errorCallback;
