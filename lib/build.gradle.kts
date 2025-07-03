@@ -1,6 +1,8 @@
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
+    id("kotlin-kapt")
+    id("dagger.hilt.android.plugin")
     id("maven-publish")
     id("signing")
 }
@@ -58,6 +60,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("com.getkeepsafe.relinker:relinker:1.4.5")
     implementation("net.lingala.zip4j:zip4j:2.11.5")
+    
+    // Hilt dependency injection
+    implementation("com.google.dagger:hilt-android:2.51.1")
+    kapt("com.google.dagger:hilt-compiler:2.51.1")
 }
 
 val siteUrl = "https://github.com/simonnorberg/kortholt"

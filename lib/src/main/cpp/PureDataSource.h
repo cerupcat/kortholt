@@ -1,34 +1,37 @@
 #ifndef PUREDATASOURCE_H
 #define PUREDATASOURCE_H
 
-#include <IRenderableAudio.h>
-#include <PdBase.hpp>
-#include <jni.h>
+#include <cstdint>
+#include <memory>
+
+// Include libpd C headers for global functions  
+extern "C" {
+    #include "z_libpd.h"
+}
+
+// Include Oboe IRenderableAudio interface
+#include "./oboe/samples/shared/IRenderableAudio.h"
 
 class PureDataSource : public IRenderableAudio {
-public:
-    PureDataSource(int32_t ticksPerBuffer);
-
-    ~PureDataSource() = default;
-
-    void init(int32_t sampleRate, int32_t channelCount);
-
-    void renderAudio(float *audioData, int32_t numFrames) override;
-
-    void sendBang(const char *dest);
-    void sendFloat(const char *dest, float value);
-    void sendSymbol(const char *dest, const char *symbol);
-    
-    bool openPatch(const char *patch, const char *path);
-    void addToSearchPath(const char *path);
-    
-    // JNI bridge setup
-    void setJavaReceiver(JavaVM* jvm, jobject receiver);
-
 private:
     int32_t ticksPerBuffer;
-    std::shared_ptr<pd::PdBase> pdBase;
-    std::shared_ptr<pd::PdReceiver> bridgedReceiver;
+
+public:
+    explicit PureDataSource(int32_t ticksPerBuffer);
+    
+    void init(int32_t sampleRate, int32_t channelCount);
+    
+    // IRenderableAudio interface implementation
+    void renderAudio(float *audioData, int32_t numFrames) override;
+    
+    // Message sending functions to Pure Data
+    void sendFloat(const char *dest, float value);
+    void sendBang(const char *dest);
+    void sendSymbol(const char *dest, const char *symbol);
+    
+    // Patch management functions
+    bool openPatch(const char *patch, const char *path);
+    void addToSearchPath(const char *path);
 };
 
-#endif //PUREDATASOURCE_H
+#endif // PUREDATASOURCE_H

@@ -6,57 +6,74 @@ import android.os.Process
 import androidx.annotation.RawRes
 import androidx.core.content.getSystemService
 import com.getkeepsafe.relinker.ReLinker
+import dagger.hilt.android.qualifiers.ApplicationContext
 import java.io.File
 import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
+import javax.inject.Inject
+import javax.inject.Singleton
 import kotlin.time.Duration
 import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.withContext
 import net.lingala.zip4j.ZipFile
 import org.puredata.core.PdBase
+import org.puredata.core.PdBaseLoader
 import org.puredata.core.PdReceiver
 // Using fully qualified names to avoid conflicts
 
-internal class KortholtPlayer(
-    private val context: Context,
-    private val dispatcher: CoroutineDispatcher
+@Singleton
+internal class KortholtPlayer @Inject constructor(
+    @ApplicationContext private val context: Context,
+    private val dispatcher: CoroutineDispatcher,
 ) : Kortholt.Player {
 
     private val patchHandle = AtomicLong(NOT_SET)
     private val kortholtHandle = AtomicLong(NOT_SET)
 
+    // Message polling management following pd-for-android pattern
+    private val pollingScope = CoroutineScope(SupervisorJob() + Dispatchers.Default)
+    private var messagePollingJob: Job? = null
+
     // Callbacks for receiving messages from Pure Data
     private val floatReceivers = mutableMapOf<String, (Float) -> Unit>()
     private val listReceivers = mutableMapOf<String, (List<Any>) -> Unit>()
     private val subscribedSymbols = mutableSetOf<String>()
-    
+
     // PdReceiver implementation to handle messages from Pure Data
     private val pdReceiver = object : PdReceiver.Adapter() {
         override fun print(s: String) {
             android.util.Log.d("KortholtPlayer", "PD Print: $s")
         }
-        
+
         override fun receiveFloat(source: String, x: Float) {
             android.util.Log.d("KortholtPlayer", "Received float from $source: $x")
             floatReceivers[source]?.invoke(x)
         }
-        
+
         override fun receiveList(source: String, vararg args: Any) {
             android.util.Log.d("KortholtPlayer", "Received list from $source: ${args.toList()}")
             listReceivers[source]?.invoke(args.toList())
         }
-        
+
         override fun receiveBang(source: String) {
             android.util.Log.d("KortholtPlayer", "Received bang from $source")
             // Treat bang as a float with value 1.0
             floatReceivers[source]?.invoke(1.0f)
         }
-        
+
         override fun receiveSymbol(source: String, symbol: String) {
             android.util.Log.d("KortholtPlayer", "Received symbol from $source: $symbol")
             // Treat symbol as a list with the symbol as the only element
             listReceivers[source]?.invoke(listOf(symbol))
         }
-        
+
         override fun receiveMessage(source: String, symbol: String, vararg args: Any) {
             android.util.Log.d("KortholtPlayer", "Received message from $source ($symbol): ${args.toList()}")
             // Treat message as a list with symbol + args
@@ -65,11 +82,27 @@ internal class KortholtPlayer(
     }
 
     init {
-        ReLinker.loadLibrary(context, "pd", VERSION)
-        ReLinker.loadLibrary(context, "pdnative", VERSION)
+        // Override PdBase loader to use our custom libraries BEFORE PdBase is accessed
+        PdBaseLoader.loaderHandler = object : PdBaseLoader() {
+            override fun load() {
+                android.util.Log.d("KortholtPlayer", "Custom PdBaseLoader: loading pd and pdnative (Oboe implementation)")
+                try {
+                    ReLinker.loadLibrary(context, "pd", VERSION)
+                    ReLinker.loadLibrary(context, "pdnative", VERSION)  // Our custom Oboe implementation
+                } catch (e: Exception) {
+                    android.util.Log.e("KortholtPlayer", "Failed to load pd libraries", e)
+                    throw e
+                }
+            }
+        }
+        
+        // Load the Kortholt native library
         ReLinker.loadLibrary(context, "kortholt", VERSION)
+
+        android.util.Log.d("KortholtPlayer", "Native libraries loaded successfully")
         
         // Set up PdReceiver to handle messages from Pure Data
+        // This MUST happen before C++ calls libpd_init_audio() or libpd will crash
         PdBase.setReceiver(pdReceiver)
         android.util.Log.d("KortholtPlayer", "PdReceiver initialized")
     }
@@ -85,7 +118,7 @@ internal class KortholtPlayer(
                 android.util.Log.w("KortholtPlayer", "Cannot open patch: stream not started")
                 return@runCatching false
             }
-            
+
             context.resources.openRawResource(patchRes).use { input ->
                 val dir = context.cacheDir
                 val patchFile = File(dir, patchName)
@@ -95,13 +128,13 @@ internal class KortholtPlayer(
                     zip.outputStream().use { output -> input.copyTo(output) }
                     ZipFile(zip).extractAll(dir.absolutePath)
                     zip.delete()
-                    
+
                     // Add the cache directory to Pure Data search path for extracted files
                     PdBase.addToSearchPath(dir.absolutePath)
                 } else {
                     patchFile.outputStream().use { output -> input.copyTo(output) }
                 }
-                
+
                 if (patchFile.exists()) {
                     try {
                         // Use PdBase to open the patch and get a handle
@@ -137,11 +170,19 @@ internal class KortholtPlayer(
             stopStream()
             setDefaultStreamValues()
             kortholtHandle.set(nativeCreateKortholt(getExclusiveCores(), stream))
+            
+            // Start message polling after successful stream creation (following pd-for-android pattern)
+            if (kortholtHandle.get() != NOT_SET) {
+                startMessagePolling()
+            }
         }.isSuccess
     }
 
     override suspend fun stopStream() = withContext(dispatcher) {
         runCatching {
+            // Stop message polling first (following pd-for-android pattern)
+            stopMessagePolling()
+            
             kortholtHandle.getAndSet(NOT_SET).takeIf { it != NOT_SET }?.let { nativeDeleteKortholt(it) }
         }.isSuccess
     }
@@ -179,7 +220,7 @@ internal class KortholtPlayer(
     override fun setFloatReceiver(receiver: String, callback: (Float) -> Unit) {
         android.util.Log.d("KortholtPlayer", "Setting float receiver for: $receiver")
         floatReceivers[receiver] = callback
-        
+
         // Subscribe to the symbol in Pure Data if not already subscribed
         if (subscribedSymbols.add(receiver)) {
             val result = PdBase.subscribe(receiver)
@@ -190,7 +231,7 @@ internal class KortholtPlayer(
     override fun setListReceiver(receiver: String, callback: (List<Any>) -> Unit) {
         android.util.Log.d("KortholtPlayer", "Setting list receiver for: $receiver")
         listReceivers[receiver] = callback
-        
+
         // Subscribe to the symbol in Pure Data if not already subscribed
         if (subscribedSymbols.add(receiver)) {
             val result = PdBase.subscribe(receiver)
@@ -202,12 +243,12 @@ internal class KortholtPlayer(
         android.util.Log.d("KortholtPlayer", "Removing receiver for: $receiver")
         val hadFloatReceiver = floatReceivers.remove(receiver) != null
         val hadListReceiver = listReceivers.remove(receiver) != null
-        
+
         // Only unsubscribe if we had receivers and now have none for this symbol
-        if ((hadFloatReceiver || hadListReceiver) && 
-            !floatReceivers.containsKey(receiver) && 
+        if ((hadFloatReceiver || hadListReceiver) &&
+            !floatReceivers.containsKey(receiver) &&
             !listReceivers.containsKey(receiver)) {
-            
+
             if (subscribedSymbols.remove(receiver)) {
                 PdBase.unsubscribe(receiver)
                 android.util.Log.d("KortholtPlayer", "Unsubscribed from '$receiver'")
@@ -258,6 +299,39 @@ internal class KortholtPlayer(
         startBang: String,
         stopBang: String
     ): Int
+
+    /**
+     * Start automatic message polling following pd-for-android pattern.
+     * This polls the libpd message queue every 10ms and forwards messages to Java receivers.
+     */
+    private fun startMessagePolling() {
+        stopMessagePolling() // Stop any existing polling
+        
+        messagePollingJob = pollingScope.launch {
+            android.util.Log.d("KortholtPlayer", "Message polling started (pd-for-android pattern)")
+            
+            while (true) {
+                try {
+                    // Poll libpd message queue - this is equivalent to what PdAudio does automatically
+                    PdBase.pollPdMessageQueue()
+                } catch (e: Exception) {
+                    android.util.Log.e("KortholtPlayer", "Error polling PD messages: ${e.message}")
+                }
+                
+                // 10ms polling interval for low latency (similar to pd-for-android's 20ms timer)
+                delay(10)
+            }
+        }
+    }
+    
+    /**
+     * Stop automatic message polling.
+     */
+    private fun stopMessagePolling() {
+        messagePollingJob?.cancel()
+        messagePollingJob = null
+        android.util.Log.d("KortholtPlayer", "Message polling stopped")
+    }
 
     companion object {
         private const val NOT_SET = -1L
