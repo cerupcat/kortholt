@@ -51,7 +51,6 @@ void PureDataInputSource::init(int32_t sampleRate, int32_t channelCount) {
 
 void PureDataInputSource::renderAudio(float *audioData, int32_t numFrames) {
     if (!initialized || !inputBuffer) {
-        LOGE("renderAudio called but not initialized");
         return;
     }
     
@@ -60,9 +59,6 @@ void PureDataInputSource::renderAudio(float *audioData, int32_t numFrames) {
     // Copy the incoming audio data to our input buffer
     int32_t framesToCopy = std::min(numFrames * inputChannels, inputBufferSize);
     memcpy(inputBuffer, audioData, framesToCopy * sizeof(float));
-    
-    LOGD("renderAudio: captured %d frames (%d samples) of input audio", 
-         numFrames, framesToCopy);
 }
 
 void PureDataInputSource::getInputAudio(float *outputBuffer, int32_t numFrames) {
@@ -77,7 +73,4 @@ void PureDataInputSource::getInputAudio(float *outputBuffer, int32_t numFrames) 
     // Copy captured input audio to the output buffer for Pure Data processing
     int32_t framesToCopy = std::min(numFrames * inputChannels, inputBufferSize);
     memcpy(outputBuffer, inputBuffer, framesToCopy * sizeof(float));
-    
-    LOGD("getInputAudio: provided %d frames (%d samples) to Pure Data", 
-         numFrames, framesToCopy);
 } 

@@ -88,9 +88,6 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
     if (inputBuffer) {
         delete[] inputBuffer;
     }
-    
-    LOGD("renderAudio: processed %d frames (%d ticks) with %s input", 
-         numFrames, ticks, inputBuffer ? "microphone" : "no");
 }
 
 void PureDataSource::processAudio(float *inputData, float *outputData, int32_t numFrames) {
@@ -99,8 +96,6 @@ void PureDataSource::processAudio(float *inputData, float *outputData, int32_t n
     // Process audio using global libpd with both input and output
     int ticks = numFrames / libpd_blocksize();
     libpd_process_float(ticks, inputData, outputData);
-    
-    LOGD("processAudio: processed %d frames (%d ticks) with full duplex", numFrames, ticks);
 }
 
 void PureDataSource::sendFloat(const char *dest, float value) {
