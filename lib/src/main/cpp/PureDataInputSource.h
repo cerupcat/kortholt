@@ -23,7 +23,9 @@ class PureDataInputSource : public IRenderableAudio {
 private:
     // Configuration
     static constexpr size_t MAX_CHANNELS = 8;
-    static constexpr size_t RING_BUFFER_SIZE = 8192; // Power of 2 for efficiency
+    static constexpr size_t MIN_RING_BUFFER_SIZE = 2048;  // Minimum for low-end devices
+    static constexpr size_t MAX_RING_BUFFER_SIZE = 16384; // Maximum for high-end devices
+    static constexpr size_t DEFAULT_RING_BUFFER_SIZE = 8192; // Default fallback
 
     // Audio parameters
     int32_t ticksPerBuffer_;
@@ -37,6 +39,9 @@ private:
     // Pre-allocated working buffers to avoid allocation in audio callbacks
     std::unique_ptr<float[]> tempBuffer_;
     size_t tempBufferSize_;
+
+    // Adaptive buffer sizing
+    size_t adaptiveRingBufferSize_;
 
     // Statistics for monitoring (atomic for thread safety)
     std::atomic<uint64_t> totalFramesReceived_{0};
@@ -119,6 +124,11 @@ private:
      * Initialize ring buffers for the specified channel count
      */
     void initializeRingBuffers(int32_t channelCount);
+
+    /**
+     * Calculate optimal ring buffer size based on device capabilities
+     */
+    size_t calculateOptimalBufferSize(int32_t sampleRate, int32_t channelCount) const;
 };
 
 #endif // PUREDATAINPUTSOURCE_H

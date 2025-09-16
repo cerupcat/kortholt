@@ -9,7 +9,7 @@ option(PD_MULTI  "Compile with multiple instance support" OFF)
 option(PD_LOCALE "Set the LC_NUMERIC number format to the default C locale" ON)
 
 set(CMAKE_C_FLAGS         "${CMAKE_C_FLAGS} -Wno-int-to-pointer-cast -Wno-pointer-to-int-cast")
-set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS} -ffast-math -funroll-loops -fomit-frame-pointer -O3")
+set(CMAKE_C_FLAGS_RELEASE "${CMAKE_C_FLAGS} -fomit-frame-pointer -O2")
 set(CMAKE_C_FLAGS_DEBUG   "${CMAKE_C_FLAGS} -g -O0")
 
 set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -Wl,-Bsymbolic")
@@ -326,18 +326,17 @@ target_include_directories(
 
 target_link_libraries(kortholt android log libpd oboe)
 
-# Improved compiler flags for real-time audio processing
+# Stable compiler flags optimized for broad device compatibility
 target_compile_options(kortholt PRIVATE
     -Wall -Wextra
     -Wno-unused-parameter  # Allow unused parameters in interface methods
-    -O3                    # Optimize for speed (more predictable than -Ofast)
-    -fno-math-errno        # Don't set errno for math functions (faster)
-    -fno-trapping-math     # Allow optimizations that might change floating-point behavior
-    -ffinite-math-only     # Assume finite math only
-    -ffast-math            # Enable fast math optimizations
-    -funroll-loops         # Unroll loops for better performance
-    -fomit-frame-pointer   # Omit frame pointer for more registers
+    -O2                    # Balanced optimization (more stable than -O3)
+    -fno-math-errno        # Don't set errno for math functions (safe optimization)
+    -fomit-frame-pointer   # Omit frame pointer for more registers (safe)
     -fvisibility=hidden    # Hide symbols by default for smaller binary
+    # Removed aggressive optimizations for stability:
+    # -O3, -fno-trapping-math, -ffinite-math-only, -ffast-math, -funroll-loops
+    # These can cause issues on diverse Android devices and chipsets
 )
 
 # Architecture-specific optimizations

@@ -3,6 +3,8 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <sys/system_properties.h>
+#include <unistd.h>
 
 #define LOG_TAG "PureDataSource"
 #ifndef LOGD
@@ -21,7 +23,9 @@ PureDataSource::PureDataSource(int32_t ticksPerBuffer) :
     ticksPerBuffer_(ticksPerBuffer),
     maxFramesPerCallback_(0),
     inputBufferSize_(0),
-    tempBufferSize_(0) {
+    tempBufferSize_(0),
+    useConservativeSettings_(false),
+    adaptiveTicksPerBuffer_(ticksPerBuffer) {
     LOGD("PureDataSource created with ticksPerBuffer=%d", ticksPerBuffer);
 }
 
@@ -40,7 +44,7 @@ bool PureDataSource::validateParameters(int32_t sampleRate, int32_t channelCount
 }
 
 size_t PureDataSource::calculateMaxFramesPerCallback() const {
-    return ticksPerBuffer_ * libpd_blocksize();
+    return adaptiveTicksPerBuffer_ * libpd_blocksize();
 }
 
 bool PureDataSource::initializeBuffers() {
@@ -104,6 +108,9 @@ bool PureDataSource::init(int32_t sampleRate, int32_t channelCount) {
         return false;
     }
 
+    // Apply device-specific tuning before initialization
+    applyDeviceSpecificTuning(sampleRate, channelCount);
+
     // Store output channel count
     outputChannels_.store(channelCount, std::memory_order_release);
 
@@ -151,7 +158,7 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
     // It MUST be lock-free and allocation-free
 
     if (!initialized_.load(std::memory_order_acquire) || !audioData || numFrames <= 0) {
-        // Zero output if not initialized
+        // Zero output if not initialized - always provide silence rather than random data
         if (audioData && numFrames > 0) {
             const int32_t outputChans = outputChannels_.load(std::memory_order_acquire);
             std::memset(audioData, 0, numFrames * outputChans * sizeof(float));
@@ -161,52 +168,133 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
 
     totalCallbacks_.fetch_add(1, std::memory_order_relaxed);
 
-    // Validate frame count to prevent buffer overruns
+    // Robust frame count validation with graceful degradation
     if (static_cast<size_t>(numFrames) > maxFramesPerCallback_) {
-        LOGW("Frame count %d exceeds maximum %zu, clamping", numFrames, maxFramesPerCallback_);
+        LOGW("Frame count %d exceeds maximum %zu, clamping for stability", numFrames, maxFramesPerCallback_);
         numFrames = static_cast<int32_t>(maxFramesPerCallback_);
         failedCallbacks_.fetch_add(1, std::memory_order_relaxed);
     }
 
-    if (!processPdTicks(numFrames, audioData)) {
+    // Validate frame count is aligned to Pure Data block size for stability
+    const int32_t blockSize = libpd_blocksize();
+    const int32_t alignedFrames = (numFrames / blockSize) * blockSize;
+
+    if (alignedFrames != numFrames) {
+        LOGW("Frame count %d not aligned to block size %d, using %d frames",
+             numFrames, blockSize, alignedFrames);
+        numFrames = alignedFrames;
+        if (numFrames <= 0) {
+            // If we can't process any complete blocks, output silence
+            const int32_t outputChans = outputChannels_.load(std::memory_order_acquire);
+            std::memset(audioData, 0, numFrames * outputChans * sizeof(float));
+            return;
+        }
+    }
+
+    // Attempt processing with error recovery
+    bool processingSucceeded = false;
+    try {
+        processingSucceeded = processPdTicks(numFrames, audioData);
+    } catch (...) {
+        // Catch any exceptions to prevent audio thread crashes
+        LOGE("Exception in Pure Data processing, outputting silence");
+        processingSucceeded = false;
+    }
+
+    if (!processingSucceeded) {
         failedCallbacks_.fetch_add(1, std::memory_order_relaxed);
-        // Zero output on failure
+        // Always output silence on failure rather than leaving uninitialized data
         const int32_t outputChans = outputChannels_.load(std::memory_order_acquire);
         std::memset(audioData, 0, numFrames * outputChans * sizeof(float));
+
+        // Log periodic warnings to avoid log spam
+        const uint64_t totalCalls = totalCallbacks_.load(std::memory_order_relaxed);
+        if (totalCalls % 1000 == 0) {  // Log every 1000 calls
+            const uint64_t failures = failedCallbacks_.load(std::memory_order_relaxed);
+            LOGW("Audio processing degraded: %llu failures out of %llu calls",
+                 static_cast<unsigned long long>(failures),
+                 static_cast<unsigned long long>(totalCalls));
+        }
     }
 }
 
 bool PureDataSource::processPdTicks(int32_t numFrames, float *outputData) {
-    const int32_t inputChans = inputChannels_.load(std::memory_order_acquire);
-
-    // Calculate number of Pure Data ticks
-    const int32_t blockSize = libpd_blocksize();
-    const int32_t ticks = numFrames / blockSize;
-
-    if (ticks <= 0) {
+    // Validate parameters before processing
+    if (!outputData || numFrames <= 0) {
         return false;
     }
 
-    // Prepare input buffer for Pure Data
+    const int32_t inputChans = inputChannels_.load(std::memory_order_acquire);
+    const int32_t outputChans = outputChannels_.load(std::memory_order_acquire);
+
+    // Calculate number of Pure Data ticks
+    const int32_t blockSize = libpd_blocksize();
+    if (blockSize <= 0) {
+        LOGE("Invalid Pure Data block size: %d", blockSize);
+        return false;
+    }
+
+    const int32_t ticks = numFrames / blockSize;
+    if (ticks <= 0) {
+        // Not enough frames for a complete block, just return silence
+        std::memset(outputData, 0, numFrames * outputChans * sizeof(float));
+        return true;
+    }
+
+    // Prepare input buffer for Pure Data with additional safety checks
     float* pdInputBuffer = nullptr;
-    if (inputChans > 0 && inputSource_) {
+    if (inputChans > 0 && inputSource_ && inputBuffer_) {
         pdInputBuffer = inputBuffer_.get();
 
-        // Get input audio from the input source
-        const size_t framesRead = inputSource_->getInputAudio(pdInputBuffer, numFrames);
+        // Safely get input audio from the input source
+        try {
+            const size_t framesRead = inputSource_->getInputAudio(pdInputBuffer, numFrames);
 
-        // Zero-fill any remaining frames if we didn't get enough input
-        if (framesRead < static_cast<size_t>(numFrames)) {
-            const size_t remainingFrames = numFrames - framesRead;
-            const size_t remainingBytes = remainingFrames * inputChans * sizeof(float);
-            std::memset(&pdInputBuffer[framesRead * inputChans], 0, remainingBytes);
+            // Zero-fill any remaining frames if we didn't get enough input
+            if (framesRead < static_cast<size_t>(numFrames)) {
+                const size_t remainingFrames = numFrames - framesRead;
+                const size_t remainingBytes = remainingFrames * inputChans * sizeof(float);
+                std::memset(&pdInputBuffer[framesRead * inputChans], 0, remainingBytes);
+            }
+
+            // Validate input data for NaN/infinity to prevent Pure Data issues
+            for (size_t i = 0; i < numFrames * inputChans; ++i) {
+                if (!std::isfinite(pdInputBuffer[i])) {
+                    pdInputBuffer[i] = 0.0f;  // Replace non-finite values with silence
+                }
+            }
+        } catch (...) {
+            // If input processing fails, use silence
+            std::memset(pdInputBuffer, 0, numFrames * inputChans * sizeof(float));
         }
     }
 
-    // Process with Pure Data
-    libpd_process_float(ticks, pdInputBuffer, outputData);
+    // Process with Pure Data with additional safety
+    try {
+        // Pre-initialize output buffer to prevent garbage output on PD failure
+        std::memset(outputData, 0, numFrames * outputChans * sizeof(float));
 
-    return true;
+        libpd_process_float(ticks, pdInputBuffer, outputData);
+
+        // Post-process validation: check for NaN/infinity in output
+        bool outputValid = true;
+        for (size_t i = 0; i < numFrames * outputChans; ++i) {
+            if (!std::isfinite(outputData[i])) {
+                outputData[i] = 0.0f;  // Replace non-finite values with silence
+                outputValid = false;
+            }
+        }
+
+        if (!outputValid) {
+            LOGW("Pure Data generated non-finite audio values, replaced with silence");
+        }
+
+        return true;
+    } catch (...) {
+        // If Pure Data processing fails, ensure we output silence
+        std::memset(outputData, 0, numFrames * outputChans * sizeof(float));
+        return false;
+    }
 }
 
 bool PureDataSource::processAudio(float *inputData, float *outputData, int32_t numFrames) {
@@ -285,4 +373,135 @@ PureDataSource::Statistics PureDataSource::getStatistics() const {
 void PureDataSource::resetStatistics() {
     totalCallbacks_.store(0, std::memory_order_relaxed);
     failedCallbacks_.store(0, std::memory_order_relaxed);
+}
+
+void PureDataSource::applyDeviceSpecificTuning(int32_t sampleRate, int32_t channelCount) {
+    LOGD("Applying device-specific tuning for sampleRate=%d, channels=%d", sampleRate, channelCount);
+
+    // Get device information for adaptive tuning
+    char device_brand[PROP_VALUE_MAX];
+    char device_model[PROP_VALUE_MAX];
+    char hardware[PROP_VALUE_MAX];
+    char sdk_version[PROP_VALUE_MAX];
+
+    __system_property_get("ro.product.brand", device_brand);
+    __system_property_get("ro.product.model", device_model);
+    __system_property_get("ro.hardware", hardware);
+    __system_property_get("ro.build.version.sdk", sdk_version);
+
+    // Get number of CPU cores
+    const long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
+    const int sdk_int = atoi(sdk_version);
+
+    LOGD("Device info: brand=%s, model=%s, hardware=%s, SDK=%d, cores=%ld",
+         device_brand, device_model, hardware, sdk_int, num_cores);
+
+    // Start with default settings
+    adaptiveTicksPerBuffer_ = ticksPerBuffer_;
+    useConservativeSettings_ = false;
+
+    // Apply conservative settings for older Android versions
+    if (sdk_int < 23) {  // Android 6.0 (API 23) and below
+        useConservativeSettings_ = true;
+        adaptiveTicksPerBuffer_ = std::max(8, ticksPerBuffer_);
+        LOGD("Applied old Android version optimization: increased buffer safety");
+    }
+
+    // Apply CPU core-based optimizations
+    if (num_cores <= 4) {
+        // Low-end devices: prioritize stability over latency
+        useConservativeSettings_ = true;
+        adaptiveTicksPerBuffer_ = std::max(8, adaptiveTicksPerBuffer_);
+        LOGD("Applied low-core optimization: conservative settings for %ld cores", num_cores);
+    } else if (num_cores >= 8) {
+        // High-end devices: can handle more aggressive settings
+        adaptiveTicksPerBuffer_ = std::min(4, adaptiveTicksPerBuffer_);
+        LOGD("Applied high-core optimization: optimized settings for %ld cores", num_cores);
+    }
+
+    // Sample rate specific adjustments
+    if (sampleRate >= 96000) {
+        // High sample rates need larger buffers for stability
+        adaptiveTicksPerBuffer_ = std::max(8, adaptiveTicksPerBuffer_);
+        LOGD("Applied high sample rate optimization: increased buffer for %d Hz", sampleRate);
+    } else if (sampleRate <= 22050) {
+        // Lower sample rates can use smaller buffers
+        adaptiveTicksPerBuffer_ = std::max(2, std::min(4, adaptiveTicksPerBuffer_));
+        LOGD("Applied low sample rate optimization: optimized buffer for %d Hz", sampleRate);
+    }
+
+    // Channel count adjustments
+    if (channelCount > 2) {
+        // Multi-channel processing needs larger buffers
+        adaptiveTicksPerBuffer_ = std::max(6, adaptiveTicksPerBuffer_);
+        LOGD("Applied multi-channel optimization: increased buffer for %d channels", channelCount);
+    }
+
+    // Device-specific known issues and optimizations
+    if (strstr(device_brand, "samsung") != nullptr) {
+        if (strstr(device_model, "Galaxy A") != nullptr || strstr(device_model, "Galaxy J") != nullptr) {
+            // Samsung budget devices often have audio processing issues
+            useConservativeSettings_ = true;
+            adaptiveTicksPerBuffer_ = std::max(12, adaptiveTicksPerBuffer_);
+            LOGD("Applied Samsung budget device optimization: very conservative settings");
+        } else if (strstr(device_model, "Galaxy S") != nullptr && strstr(device_model, "Galaxy S1") == nullptr) {
+            // Samsung flagship devices (but not S10/S1x which might match S1)
+            adaptiveTicksPerBuffer_ = std::max(4, std::min(8, adaptiveTicksPerBuffer_));
+            LOGD("Applied Samsung flagship optimization: balanced settings");
+        }
+    }
+
+    if (strstr(hardware, "mt") != nullptr || strstr(hardware, "mediatek") != nullptr) {
+        // MediaTek processors often have inconsistent audio performance
+        useConservativeSettings_ = true;
+        adaptiveTicksPerBuffer_ = std::max(10, adaptiveTicksPerBuffer_);
+        LOGD("Applied MediaTek optimization: conservative settings for stability");
+    }
+
+    if (strstr(hardware, "msm") != nullptr || strstr(hardware, "qcom") != nullptr || strstr(hardware, "sdm") != nullptr) {
+        // Qualcomm Snapdragon processors generally have good audio performance
+        if (num_cores >= 8) {
+            adaptiveTicksPerBuffer_ = std::max(2, std::min(6, adaptiveTicksPerBuffer_));
+            LOGD("Applied Qualcomm high-end optimization: aggressive settings");
+        } else {
+            adaptiveTicksPerBuffer_ = std::max(4, std::min(8, adaptiveTicksPerBuffer_));
+            LOGD("Applied Qualcomm mid-range optimization: balanced settings");
+        }
+    }
+
+    if (strstr(device_brand, "huawei") != nullptr || strstr(device_brand, "honor") != nullptr) {
+        // Huawei/Honor devices have varying audio performance
+        useConservativeSettings_ = true;
+        adaptiveTicksPerBuffer_ = std::max(8, adaptiveTicksPerBuffer_);
+        LOGD("Applied Huawei/Honor optimization: conservative settings");
+    }
+
+    if (strstr(device_brand, "xiaomi") != nullptr || strstr(device_brand, "redmi") != nullptr) {
+        // Xiaomi devices generally have good audio performance but vary widely
+        adaptiveTicksPerBuffer_ = std::max(6, std::min(10, adaptiveTicksPerBuffer_));
+        LOGD("Applied Xiaomi optimization: moderate settings");
+    }
+
+    if (strstr(device_brand, "oppo") != nullptr || strstr(device_brand, "oneplus") != nullptr || strstr(device_brand, "vivo") != nullptr) {
+        // BBK Electronics family devices (OnePlus usually performs better)
+        if (strstr(device_brand, "oneplus") != nullptr) {
+            adaptiveTicksPerBuffer_ = std::max(4, std::min(8, adaptiveTicksPerBuffer_));
+            LOGD("Applied OnePlus optimization: balanced settings");
+        } else {
+            adaptiveTicksPerBuffer_ = std::max(8, adaptiveTicksPerBuffer_);
+            LOGD("Applied OPPO/Vivo optimization: conservative settings");
+        }
+    }
+
+    // Ensure ticks per buffer is reasonable
+    adaptiveTicksPerBuffer_ = std::max(1, std::min(32, adaptiveTicksPerBuffer_));
+
+    // Log final settings
+    if (adaptiveTicksPerBuffer_ != ticksPerBuffer_) {
+        LOGD("Device tuning complete: adjusted ticksPerBuffer from %d to %d (conservative=%s)",
+             ticksPerBuffer_, adaptiveTicksPerBuffer_, useConservativeSettings_ ? "yes" : "no");
+    } else {
+        LOGD("Device tuning complete: using default ticksPerBuffer=%d (conservative=%s)",
+             adaptiveTicksPerBuffer_, useConservativeSettings_ ? "yes" : "no");
+    }
 }
