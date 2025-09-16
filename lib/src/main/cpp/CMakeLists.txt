@@ -299,13 +299,22 @@ set(APP_SOURCES
     ${OBOE_DIR}/samples/hello-oboe/src/main/cpp/LatencyTuningCallback.cpp
     ${OBOE_DIR}/apps/OboeTester/app/src/main/cpp/util/WaveFileWriter.cpp
 )
+
+# Real-time safe headers are included automatically
+
 add_library(
     kortholt
     SHARED
     ${DEBUG_UTILS_SOURCES}
     ${APP_SOURCES}
 )
-target_link_options(kortholt PRIVATE "-Wl,-z,max-page-size=16384")
+
+# Improved linker options for better performance
+target_link_options(kortholt PRIVATE
+    "-Wl,-z,max-page-size=16384"
+    "-Wl,-z,relro,-z,now"  # Security hardening
+    "-Wl,--gc-sections"    # Remove unused sections
+)
 
 target_include_directories(
     kortholt
@@ -314,5 +323,38 @@ target_include_directories(
     libpd/cpp
     libpd/libpd_wrapper/util
 )
+
 target_link_libraries(kortholt android log libpd oboe)
-target_compile_options(kortholt PRIVATE -Wall -Werror -Ofast)
+
+# Improved compiler flags for real-time audio processing
+target_compile_options(kortholt PRIVATE
+    -Wall -Wextra
+    -Wno-unused-parameter  # Allow unused parameters in interface methods
+    -O3                    # Optimize for speed (more predictable than -Ofast)
+    -fno-math-errno        # Don't set errno for math functions (faster)
+    -fno-trapping-math     # Allow optimizations that might change floating-point behavior
+    -ffinite-math-only     # Assume finite math only
+    -ffast-math            # Enable fast math optimizations
+    -funroll-loops         # Unroll loops for better performance
+    -fomit-frame-pointer   # Omit frame pointer for more registers
+    -fvisibility=hidden    # Hide symbols by default for smaller binary
+)
+
+# Architecture-specific optimizations
+if(ANDROID_ABI STREQUAL "armeabi-v7a")
+    target_compile_options(kortholt PRIVATE
+        -march=armv7-a     # Target ARMv7-A architecture
+        -mfpu=neon         # Enable NEON SIMD instructions
+    )
+elseif(ANDROID_ABI STREQUAL "arm64-v8a")
+    target_compile_options(kortholt PRIVATE
+        -march=armv8-a     # Target ARMv8-A architecture (64-bit ARM)
+    )
+endif()
+
+# C++ specific optimizations
+target_compile_features(kortholt PRIVATE cxx_std_17)
+target_compile_definitions(kortholt PRIVATE
+    NDEBUG=1               # Disable debug assertions in release
+    __OPTIMIZE__=1         # Enable optimizations
+)

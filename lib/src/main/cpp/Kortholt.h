@@ -35,6 +35,9 @@ public:
     bool openPatch(const char *patch, const char *path);
     void addToSearchPath(const char *path);
 
+    // Performance monitoring functions
+    void logPerformanceStatistics();
+
 private:
     bool isStream;
     std::mutex streamLock;

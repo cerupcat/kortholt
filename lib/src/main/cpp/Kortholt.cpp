@@ -38,15 +38,15 @@ private:
 
 Kortholt::Kortholt(std::vector<int> cpuIds, bool stream) {
     LOGD("Kortholt constructor: stream=%s", stream ? "true" : "false");
-    
+
     isStream = stream;
     ticksPerBuffer = stream ? calculateTicksPerBuffer() : DEFAULT_TICKS;
     bufferSize = ticksPerBuffer * pd::PdBase::blockSize();
-    
-    LOGD("Kortholt constructor: ticksPerBuffer=%d, bufferSize=%d, blockSize=%d", 
+
+    LOGD("Kortholt constructor: ticksPerBuffer=%d, bufferSize=%d, blockSize=%d",
          ticksPerBuffer, bufferSize, pd::PdBase::blockSize());
     LOGD("Kortholt constructor: CPU cores count=%zu", cpuIds.size());
-    
+
     pureDataSource = std::make_shared<PureDataSource>(ticksPerBuffer);
     pureDataInputSource = std::make_shared<PureDataInputSource>(ticksPerBuffer);
     errorCallback = std::make_shared<DefaultErrorCallback>(*this);
@@ -56,7 +56,7 @@ Kortholt::Kortholt(std::vector<int> cpuIds, bool stream) {
     inputCallback->setCpuIds(std::move(cpuIds));
     outputCallback->setThreadAffinityEnabled(true);
     inputCallback->setThreadAffinityEnabled(true);
-    
+
     LOGD("Kortholt constructor: Starting initialization");
     start();
 }
@@ -113,7 +113,7 @@ int32_t Kortholt::saveWaveFile(
 oboe::Result Kortholt::createPlaybackStream() {
     LOGD("createPlaybackStream: Starting Oboe output stream creation");
     LOGD("createPlaybackStream: bufferSize=%d, ticksPerBuffer=%d", bufferSize, ticksPerBuffer);
-    
+
     oboe::AudioStreamBuilder builder;
     auto result = builder.setSharingMode(oboe::SharingMode::Exclusive)
             ->setChannelCount(oboe::ChannelCount::Stereo)
@@ -126,7 +126,7 @@ oboe::Result Kortholt::createPlaybackStream() {
             ->setDataCallback(outputCallback.get())
             ->setErrorCallback(errorCallback.get())
             ->openStream(outputStream);
-    
+
     if (result == oboe::Result::OK && outputStream) {
         LOGD("createPlaybackStream: SUCCESS - Output stream opened");
         LOGD("  Sample Rate: %d Hz", outputStream->getSampleRate());
@@ -139,14 +139,14 @@ oboe::Result Kortholt::createPlaybackStream() {
     } else {
         LOGE("createPlaybackStream: FAILED - Result: %s", oboe::convertToText(result));
     }
-    
+
     return result;
 }
 
 oboe::Result Kortholt::createRecordingStream() {
     LOGD("createRecordingStream: Starting Oboe input stream creation");
     LOGD("createRecordingStream: bufferSize=%d, ticksPerBuffer=%d", bufferSize, ticksPerBuffer);
-    
+
     oboe::AudioStreamBuilder builder;
     auto result = builder.setSharingMode(oboe::SharingMode::Exclusive)
             ->setChannelCount(oboe::ChannelCount::Mono)  // Mono input for tuner
@@ -159,7 +159,7 @@ oboe::Result Kortholt::createRecordingStream() {
             ->setDataCallback(inputCallback.get())
             ->setErrorCallback(errorCallback.get())
             ->openStream(inputStream);
-    
+
     if (result == oboe::Result::OK && inputStream) {
         LOGD("createRecordingStream: SUCCESS - Input stream opened");
         LOGD("  Sample Rate: %d Hz", inputStream->getSampleRate());
@@ -172,57 +172,65 @@ oboe::Result Kortholt::createRecordingStream() {
     } else {
         LOGE("createRecordingStream: FAILED - Result: %s", oboe::convertToText(result));
     }
-    
+
     return result;
 }
 
 void Kortholt::start() {
     std::lock_guard<std::mutex> lock(streamLock);
     LOGD("start: Beginning Kortholt initialization (isStream=%s)", isStream ? "true" : "false");
-    
+
     // Create output stream for tone generation
     auto outputResult = createPlaybackStream();
     if (outputResult == oboe::Result::OK) {
         LOGD("start: Output stream created successfully");
-        
+
         // Create input stream for tuner
         auto inputResult = createRecordingStream();
         if (inputResult == oboe::Result::OK) {
             LOGD("start: Both streams created successfully, initializing Pure Data");
-            
+
             // Configure Pure Data with input channel count and set input source
             pureDataSource->setInputChannels(inputStream->getChannelCount());
             pureDataSource->setInputSource(pureDataInputSource);
-            
+
+            // Initialize input source with input stream settings (must be done first)
+            if (!pureDataInputSource->init(inputStream->getSampleRate(), inputStream->getChannelCount())) {
+                LOGE("start: Failed to initialize PureDataInputSource");
+                return;
+            }
+            LOGD("start: Input source initialized successfully");
+
             // Initialize Pure Data with output stream settings
-            pureDataSource->init(outputStream->getSampleRate(), outputStream->getChannelCount());
-            
-            // Initialize input source with input stream settings
-            pureDataInputSource->init(inputStream->getSampleRate(), inputStream->getChannelCount());
-            
+            if (!pureDataSource->init(outputStream->getSampleRate(), outputStream->getChannelCount())) {
+                LOGE("start: Failed to initialize PureDataSource");
+                return;
+            }
+            LOGD("start: Pure Data source initialized successfully");
+
             if (isStream) {
                 LOGD("start: Configuring streams for real-time audio");
-                
+
                 // Configure output stream
                 outputCallback->reset();
                 outputCallback->setSource(pureDataSource);
                 outputStream->setBufferSizeInFrames(bufferSize);
-                
+
                 // Configure input stream with input audio source
                 inputCallback->reset();
                 inputCallback->setSource(pureDataInputSource);
                 inputStream->setBufferSizeInFrames(bufferSize);
-                
+
                 // Start both streams
                 auto outputStartResult = outputStream->start();
                 auto inputStartResult = inputStream->start();
-                
+
                 if (outputStartResult == oboe::Result::OK && inputStartResult == oboe::Result::OK) {
                     LOGD("start: Both streams started successfully");
                     LOGD("  Output State: %s", oboe::convertToText(outputStream->getState()));
                     LOGD("  Input State: %s", oboe::convertToText(inputStream->getState()));
                 } else {
-                    LOGE("start: Failed to start streams - Output: %s, Input: %s", 
+                    LOGE("start: Failed to start streams - Output: %s, Input: %s",
                          oboe::convertToText(outputStartResult), oboe::convertToText(inputStartResult));
                 }
             } else {
@@ -239,7 +247,7 @@ void Kortholt::start() {
 void Kortholt::stop() {
     std::lock_guard<std::mutex> lock(streamLock);
     LOGD("stop: Stopping Kortholt");
-    
+
     // Stop output stream
     if (outputStream && outputStream->getState() != oboe::StreamState::Closed) {
         LOGD("stop: Output stream state before stop: %s", oboe::convertToText(outputStream->getState()));
@@ -249,7 +257,7 @@ void Kortholt::stop() {
         } else {
             LOGE("stop: Failed to stop output stream: %s", oboe::convertToText(stopResult));
         }
-        
+
         auto closeResult = outputStream->close();
         if (closeResult == oboe::Result::OK) {
             LOGD("stop: Output stream closed successfully");
@@ -259,7 +267,7 @@ void Kortholt::stop() {
     } else {
         LOGD("stop: Output stream already closed or null");
     }
-    
+
     // Stop input stream
     if (inputStream && inputStream->getState() != oboe::StreamState::Closed) {
         LOGD("stop: Input stream state before stop: %s", oboe::convertToText(inputStream->getState()));
@@ -269,7 +277,7 @@ void Kortholt::stop() {
         } else {
             LOGE("stop: Failed to stop input stream: %s", oboe::convertToText(stopResult));
         }
-        
+
         auto closeResult = inputStream->close();
         if (closeResult == oboe::Result::OK) {
             LOGD("stop: Input stream closed successfully");
@@ -279,7 +287,7 @@ void Kortholt::stop() {
     } else {
         LOGD("stop: Input stream already closed or null");
     }
-    
+
     outputStream.reset();
     inputStream.reset();
     LOGD("stop: Kortholt stopped");
@@ -342,6 +350,24 @@ void Kortholt::addToSearchPath(const char *path) {
     }
 }
 
+void Kortholt::logPerformanceStatistics() {
+    if (pureDataInputSource) {
+        auto inputStats = pureDataInputSource->getStatistics();
+        LOGD("INPUT PERFORMANCE: %llu frames received, %llu dropped (%.2f%%)",
+             static_cast<unsigned long long>(inputStats.totalFramesReceived),
+             static_cast<unsigned long long>(inputStats.droppedFrames),
+             inputStats.dropoutPercentage);
+    }
+
+    if (pureDataSource) {
+        auto outputStats = pureDataSource->getStatistics();
+        LOGD("OUTPUT PERFORMANCE: %llu callbacks, %llu failed (%.2f%%)",
+             static_cast<unsigned long long>(outputStats.totalCallbacks),
+             static_cast<unsigned long long>(outputStats.failedCallbacks),
+             outputStats.failurePercentage);
+    }
+}
+
 // JNI bridge functions for Kotlin access
 extern "C" {
 
@@ -351,13 +377,13 @@ Java_net_simno_kortholt_KortholtPlayer_nativeSendBang(JNIEnv *env, jobject insta
         LOGE("nativeSendBang: Invalid kortholt handle");
         return;
     }
-    
+
     auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
     const char *receiverStr = env->GetStringUTFChars(receiver, nullptr);
-    
+
     LOGD("nativeSendBang: Calling kortholt->sendBang(%s)", receiverStr);
     kortholt->sendBang(receiverStr);
-    
+
     env->ReleaseStringUTFChars(receiver, receiverStr);
 }
 
@@ -367,13 +393,13 @@ Java_net_simno_kortholt_KortholtPlayer_nativeSendFloat(JNIEnv *env, jobject inst
         LOGE("nativeSendFloat: Invalid kortholt handle");
         return;
     }
-    
+
     auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
     const char *receiverStr = env->GetStringUTFChars(receiver, nullptr);
-    
+
     LOGD("nativeSendFloat: Calling kortholt->sendFloat(%s, %.3f)", receiverStr, value);
     kortholt->sendFloat(receiverStr, value);
-    
+
     env->ReleaseStringUTFChars(receiver, receiverStr);
 }
 
@@ -383,14 +409,14 @@ Java_net_simno_kortholt_KortholtPlayer_nativeSendSymbol(JNIEnv *env, jobject ins
         LOGE("nativeSendSymbol: Invalid kortholt handle");
         return;
     }
-    
+
     auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
     const char *receiverStr = env->GetStringUTFChars(receiver, nullptr);
     const char *symbolStr = env->GetStringUTFChars(symbol, nullptr);
-    
+
     LOGD("nativeSendSymbol: Calling kortholt->sendSymbol(%s, %s)", receiverStr, symbolStr);
     kortholt->sendSymbol(receiverStr, symbolStr);
-    
+
     env->ReleaseStringUTFChars(receiver, receiverStr);
     env->ReleaseStringUTFChars(symbol, symbolStr);
 }
@@ -401,17 +427,17 @@ Java_net_simno_kortholt_KortholtPlayer_nativeOpenPatch(JNIEnv *env, jobject inst
         LOGE("nativeOpenPatch: Invalid kortholt handle");
         return false;
     }
-    
+
     auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
     const char *patchStr = env->GetStringUTFChars(patch, nullptr);
     const char *pathStr = env->GetStringUTFChars(path, nullptr);
-    
+
     LOGD("nativeOpenPatch: Calling kortholt->openPatch(%s, %s)", patchStr, pathStr);
     bool result = kortholt->openPatch(patchStr, pathStr);
-    
+
     env->ReleaseStringUTFChars(patch, patchStr);
     env->ReleaseStringUTFChars(path, pathStr);
-    
+
     return result;
 }
 
@@ -421,14 +447,26 @@ Java_net_simno_kortholt_KortholtPlayer_nativeAddToSearchPath(JNIEnv *env, jobjec
         LOGE("nativeAddToSearchPath: Invalid kortholt handle");
         return;
     }
-    
+
     auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
     const char *pathStr = env->GetStringUTFChars(path, nullptr);
-    
+
     LOGD("nativeAddToSearchPath: Calling kortholt->addToSearchPath(%s)", pathStr);
     kortholt->addToSearchPath(pathStr);
-    
+
     env->ReleaseStringUTFChars(path, pathStr);
+}
+
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeLogPerformanceStatistics(JNIEnv *env, jobject instance, jlong kortholtHandle) {
+    if (kortholtHandle == -1) {
+        LOGE("nativeLogPerformanceStatistics: Invalid kortholt handle");
+        return;
+    }
+
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    LOGD("nativeLogPerformanceStatistics: Logging performance statistics");
+    kortholt->logPerformanceStatistics();
 }
 
 }
