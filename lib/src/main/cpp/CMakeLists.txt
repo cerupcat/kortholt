@@ -296,6 +296,8 @@ set(APP_SOURCES
     PureDataSource.cpp
     PureDataInputSource.cpp
     Kortholt.cpp
+    OboeAudioRecorderNative.cpp
+    OboeAudioRecorderJNI.cpp
     ${OBOE_DIR}/samples/hello-oboe/src/main/cpp/LatencyTuningCallback.cpp
     ${OBOE_DIR}/apps/OboeTester/app/src/main/cpp/util/WaveFileWriter.cpp
 )

@@ -101,6 +101,12 @@ void PureDataInputSource::renderAudio(float *audioData, int32_t numFrames) {
         return;
     }
 
+    // Forward audio data to recorder if one is attached
+    AudioRecorderCallback* recorder = recorderCallback_.load(std::memory_order_acquire);
+    if (recorder != nullptr) {
+        recorder->onAudioData(audioData, numFrames, channels);
+    }
+
     // Update statistics
     totalFramesReceived_.fetch_add(numFrames, std::memory_order_relaxed);
 

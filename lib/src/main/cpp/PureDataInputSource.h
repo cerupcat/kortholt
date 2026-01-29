@@ -6,6 +6,7 @@
 #include <atomic>
 #include <array>
 #include "LockFreeRingBuffer.h"
+#include "AudioRecorderCallback.h"
 
 // Include libpd C headers for global functions
 extern "C" {
@@ -46,6 +47,9 @@ private:
     // Statistics for monitoring (atomic for thread safety)
     std::atomic<uint64_t> totalFramesReceived_{0};
     std::atomic<uint64_t> droppedFrames_{0};
+
+    // Optional recorder callback (atomic pointer for thread-safe updates)
+    std::atomic<AudioRecorderCallback*> recorderCallback_{nullptr};
 
 public:
     explicit PureDataInputSource(int32_t ticksPerBuffer);
@@ -113,6 +117,16 @@ public:
      * Clear all audio buffers
      */
     void clearBuffers();
+
+    /**
+     * Set a recorder callback to receive audio data for recording.
+     * The callback will be invoked from the audio thread with raw PCM data.
+     *
+     * @param callback Recorder callback (or nullptr to remove)
+     */
+    void setRecorderCallback(AudioRecorderCallback* callback) {
+        recorderCallback_.store(callback, std::memory_order_release);
+    }
 
 private:
     /**
