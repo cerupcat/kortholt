@@ -5,6 +5,7 @@
 #include <android/log.h>
 #include <jni.h>
 #include "Kortholt.h"
+#include "dr_wav.h"
 
 #define LOG_TAG "Kortholt"
 // Use Oboe's existing logging macros to avoid redefinition
@@ -18,28 +19,14 @@
 const int32_t DEFAULT_TICKS_FOR_STREAM = 8;
 const int32_t DEFAULT_TICKS = 16;
 
-class WaveOutputStream : public WaveFileOutputStream {
-public:
-    void write(uint8_t b) override {
-        mData.push_back(b);
-    }
-
-    int32_t length() {
-        return (int32_t) mData.size();
-    }
-
-    uint8_t *getData() {
-        return mData.data();
-    }
-
-private:
-    std::vector<uint8_t> mData;
-};
-
-Kortholt::Kortholt(std::vector<int> cpuIds, bool stream) {
-    LOGD("Kortholt constructor: stream=%s", stream ? "true" : "false");
+Kortholt::Kortholt(std::vector<int> cpuIds, bool stream,
+                   int32_t inputDeviceId, int32_t outputDeviceId) {
+    LOGD("Kortholt constructor: stream=%s, inputDeviceId=%d, outputDeviceId=%d",
+         stream ? "true" : "false", inputDeviceId, outputDeviceId);
 
     isStream = stream;
+    mInputDeviceId = inputDeviceId;
+    mOutputDeviceId = outputDeviceId;
     ticksPerBuffer = stream ? calculateTicksPerBuffer() : DEFAULT_TICKS;
     bufferSize = ticksPerBuffer * pd::PdBase::blockSize();
 
@@ -70,6 +57,14 @@ void Kortholt::restart() {
     start();
 }
 
+void Kortholt::setDeviceIds(int32_t inputDeviceId, int32_t outputDeviceId) {
+    LOGD("setDeviceIds: inputDeviceId=%d, outputDeviceId=%d", inputDeviceId, outputDeviceId);
+    mInputDeviceId = inputDeviceId;
+    mOutputDeviceId = outputDeviceId;
+    // Restart streams to apply new device selection
+    restart();
+}
+
 int32_t Kortholt::saveWaveFile(
         const char *fileName,
         const int32_t duration,
@@ -80,42 +75,67 @@ int32_t Kortholt::saveWaveFile(
     const int32_t channelCount = outputStream->getChannelCount();
     const int32_t totalFrames = static_cast<int32_t>(ceil(sampleRate * (duration / 1000.0)));
 
-    WaveOutputStream outStream;
-    WaveFileWriter writer(&outStream);
-    writer.setFrameRate(sampleRate);
-    writer.setSamplesPerFrame(channelCount);
-    writer.setBitsPerSample(24);
+    // Initialize dr_wav for writing
+    // Note: Using 16-bit PCM for compatibility with Android MediaExtractor
+    drwav wav;
+    drwav_data_format format;
+    format.container = drwav_container_riff;
+    format.format = DR_WAVE_FORMAT_PCM;  // 16-bit PCM for Android compatibility
+    format.channels = channelCount;
+    format.sampleRate = sampleRate;
+    format.bitsPerSample = 16;  // 16-bit integer PCM
+
+    if (!drwav_init_file_write(&wav, fileName, &format, nullptr)) {
+        LOGE("Failed to initialize dr_wav for file: %s", fileName);
+        return 0;
+    }
 
     int32_t framesPerBuffer = bufferSize * channelCount;
-    auto *audioData = new float[framesPerBuffer];
+    auto *floatData = new float[framesPerBuffer];
+    auto *int16Data = new int16_t[framesPerBuffer];
 
     int32_t frameCounter = 0;
     pureDataSource->sendBang(startBang);
     while (frameCounter < totalFrames) {
         int32_t remaining = totalFrames - frameCounter;
         int32_t numFrames = (remaining > bufferSize) ? bufferSize : remaining;
-        pureDataSource->renderAudio(audioData, framesPerBuffer);
-        writer.write(audioData, 0, numFrames * channelCount);
+        int32_t samplesToWrite = numFrames * channelCount;
+
+        pureDataSource->renderAudio(floatData, framesPerBuffer);
+
+        // Convert float to int16 for PCM format
+        for (int32_t i = 0; i < samplesToWrite; i++) {
+            float sample = floatData[i];
+            // Clamp to [-1.0, 1.0]
+            if (sample > 1.0f) sample = 1.0f;
+            if (sample < -1.0f) sample = -1.0f;
+            int16Data[i] = static_cast<int16_t>(sample * 32767.0f);
+        }
+
+        drwav_write_pcm_frames(&wav, numFrames, int16Data);
         frameCounter += numFrames;
     }
     pureDataSource->sendBang(stopBang);
-    writer.close();
 
-    if (outStream.length() > 0) {
-        auto file = std::ofstream(fileName, std::ios::out | std::ios::binary);
-        file.write((char *) outStream.getData(), outStream.length());
-        file.close();
-    }
+    // Get file size before closing
+    drwav_uint64 totalSamples = wav.dataChunkDataSize;
 
-    return outStream.length();
+    // Close and finalize WAV file
+    drwav_uninit(&wav);
+
+    delete[] floatData;
+    delete[] int16Data;
+
+    return static_cast<int32_t>(totalSamples);
 }
 
 oboe::Result Kortholt::createPlaybackStream() {
     LOGD("createPlaybackStream: Starting Oboe output stream creation");
-    LOGD("createPlaybackStream: bufferSize=%d, ticksPerBuffer=%d", bufferSize, ticksPerBuffer);
+    LOGD("createPlaybackStream: bufferSize=%d, ticksPerBuffer=%d, deviceId=%d",
+         bufferSize, ticksPerBuffer, mOutputDeviceId);
 
     oboe::AudioStreamBuilder builder;
-    auto result = builder.setSharingMode(oboe::SharingMode::Exclusive)
+    builder.setSharingMode(oboe::SharingMode::Exclusive)
             ->setChannelCount(oboe::ChannelCount::Stereo)
             ->setDirection(oboe::Direction::Output)  // Output for tone generation
             ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
@@ -124,8 +144,15 @@ oboe::Result Kortholt::createPlaybackStream() {
             ->setChannelConversionAllowed(true)
             ->setFramesPerDataCallback(bufferSize)
             ->setDataCallback(outputCallback.get())
-            ->setErrorCallback(errorCallback.get())
-            ->openStream(outputStream);
+            ->setErrorCallback(errorCallback.get());
+
+    // Set device ID if specified (not kUnspecified)
+    if (mOutputDeviceId != oboe::kUnspecified) {
+        builder.setDeviceId(mOutputDeviceId);
+        LOGD("createPlaybackStream: Using specific output device: %d", mOutputDeviceId);
+    }
+
+    auto result = builder.openStream(outputStream);
 
     if (result == oboe::Result::OK && outputStream) {
         LOGD("createPlaybackStream: SUCCESS - Output stream opened");
@@ -145,10 +172,11 @@ oboe::Result Kortholt::createPlaybackStream() {
 
 oboe::Result Kortholt::createRecordingStream() {
     LOGD("createRecordingStream: Starting Oboe input stream creation");
-    LOGD("createRecordingStream: bufferSize=%d, ticksPerBuffer=%d", bufferSize, ticksPerBuffer);
+    LOGD("createRecordingStream: bufferSize=%d, ticksPerBuffer=%d, deviceId=%d",
+         bufferSize, ticksPerBuffer, mInputDeviceId);
 
     oboe::AudioStreamBuilder builder;
-    auto result = builder.setSharingMode(oboe::SharingMode::Exclusive)
+    builder.setSharingMode(oboe::SharingMode::Exclusive)
             ->setChannelCount(oboe::ChannelCount::Mono)  // Mono input for tuner
             ->setDirection(oboe::Direction::Input)       // Input for microphone
             ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
@@ -157,8 +185,15 @@ oboe::Result Kortholt::createRecordingStream() {
             ->setChannelConversionAllowed(true)
             ->setFramesPerDataCallback(bufferSize)
             ->setDataCallback(inputCallback.get())
-            ->setErrorCallback(errorCallback.get())
-            ->openStream(inputStream);
+            ->setErrorCallback(errorCallback.get());
+
+    // Set device ID if specified (not kUnspecified)
+    if (mInputDeviceId != oboe::kUnspecified) {
+        builder.setDeviceId(mInputDeviceId);
+        LOGD("createRecordingStream: Using specific input device: %d", mInputDeviceId);
+    }
+
+    auto result = builder.openStream(inputStream);
 
     if (result == oboe::Result::OK && inputStream) {
         LOGD("createRecordingStream: SUCCESS - Input stream opened");
@@ -365,6 +400,26 @@ void Kortholt::logPerformanceStatistics() {
              static_cast<unsigned long long>(outputStats.totalCallbacks),
              static_cast<unsigned long long>(outputStats.failedCallbacks),
              outputStats.failurePercentage);
+    }
+}
+
+void Kortholt::setRecorderCallback(AudioRecorderCallback *callback) {
+    LOGD("setRecorderCallback: callback=%p", callback);
+    if (pureDataInputSource) {
+        pureDataInputSource->setRecorderCallback(callback);
+        LOGD("setRecorderCallback: Successfully set callback on PureDataInputSource");
+    } else {
+        LOGE("setRecorderCallback: pureDataInputSource is null");
+    }
+}
+
+void Kortholt::clearRecorderCallback() {
+    LOGD("clearRecorderCallback: Removing recorder callback");
+    if (pureDataInputSource) {
+        pureDataInputSource->setRecorderCallback(nullptr);
+        LOGD("clearRecorderCallback: Successfully cleared callback");
+    } else {
+        LOGE("clearRecorderCallback: pureDataInputSource is null");
     }
 }
 

@@ -32,6 +32,8 @@ import org.puredata.core.PdReceiver
 internal class KortholtPlayer @Inject constructor(
     @ApplicationContext private val context: Context,
     private val dispatcher: CoroutineDispatcher,
+    private var inputDeviceId: Int = Kortholt.Player.Builder.DEVICE_ID_UNSPECIFIED,
+    private var outputDeviceId: Int = Kortholt.Player.Builder.DEVICE_ID_UNSPECIFIED
 ) : Kortholt.Player {
 
     private val patchHandle = AtomicLong(NOT_SET)
@@ -169,8 +171,9 @@ internal class KortholtPlayer @Inject constructor(
         runCatching {
             stopStream()
             setDefaultStreamValues()
-            kortholtHandle.set(nativeCreateKortholt(getExclusiveCores(), stream))
-            
+            android.util.Log.d("KortholtPlayer", "Creating stream with inputDeviceId=$inputDeviceId, outputDeviceId=$outputDeviceId")
+            kortholtHandle.set(nativeCreateKortholt(getExclusiveCores(), stream, inputDeviceId, outputDeviceId))
+
             // Start message polling after successful stream creation (following pd-for-android pattern)
             if (kortholtHandle.get() != NOT_SET) {
                 startMessagePolling()
@@ -256,6 +259,38 @@ internal class KortholtPlayer @Inject constructor(
         }
     }
 
+    override fun setRecorderCallback(recorderHandle: Long) {
+        android.util.Log.d("KortholtPlayer", "Setting recorder callback: handle=$recorderHandle")
+        val handle = kortholtHandle.get()
+        if (handle != NOT_SET) {
+            nativeSetRecorderCallback(handle, recorderHandle)
+        } else {
+            android.util.Log.w("KortholtPlayer", "Cannot set recorder callback: stream not started")
+        }
+    }
+
+    override fun clearRecorderCallback() {
+        android.util.Log.d("KortholtPlayer", "Clearing recorder callback")
+        val handle = kortholtHandle.get()
+        if (handle != NOT_SET) {
+            nativeClearRecorderCallback(handle)
+        } else {
+            android.util.Log.w("KortholtPlayer", "Cannot clear recorder callback: stream not started")
+        }
+    }
+
+    override fun setDeviceIds(inputDeviceId: Int, outputDeviceId: Int) {
+        android.util.Log.d("KortholtPlayer", "Setting device IDs: input=$inputDeviceId, output=$outputDeviceId")
+        this.inputDeviceId = inputDeviceId
+        this.outputDeviceId = outputDeviceId
+        val handle = kortholtHandle.get()
+        if (handle != NOT_SET) {
+            nativeSetDeviceIds(handle, inputDeviceId, outputDeviceId)
+        } else {
+            android.util.Log.d("KortholtPlayer", "Stream not started, device IDs will be used on next stream creation")
+        }
+    }
+
     @ExperimentalWaveFile
     override suspend fun saveWaveFile(
         outputFile: File,
@@ -289,9 +324,17 @@ internal class KortholtPlayer @Inject constructor(
 
     private fun getExclusiveCores() = runCatching { Process.getExclusiveCores() }.getOrDefault(intArrayOf())
 
-    private external fun nativeCreateKortholt(cpuIds: IntArray, stream: Boolean): Long
+    private external fun nativeCreateKortholt(
+        cpuIds: IntArray,
+        stream: Boolean,
+        inputDeviceId: Int,
+        outputDeviceId: Int
+    ): Long
     private external fun nativeDeleteKortholt(kortholtHandle: Long)
     private external fun nativeSetDefaultStreamValues(sampleRate: Int, framesPerBurst: Int)
+    private external fun nativeSetRecorderCallback(kortholtHandle: Long, recorderHandle: Long)
+    private external fun nativeClearRecorderCallback(kortholtHandle: Long)
+    private external fun nativeSetDeviceIds(kortholtHandle: Long, inputDeviceId: Int, outputDeviceId: Int)
     private external fun nativeSaveWaveFile(
         kortholtHandle: Long,
         fileName: String,

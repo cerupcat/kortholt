@@ -6,18 +6,34 @@
 #include <IRestartable.h>
 #include <DefaultErrorCallback.h>
 #include <LatencyTuningCallback.h>
-#include <WaveFileWriter.h>
 #include "PureDataSource.h"
 #include "PureDataInputSource.h"
 
 class Kortholt : public IRestartable {
 
 public:
-    Kortholt(std::vector<int> cpuIds, bool stream);
+    /**
+     * Create Kortholt audio engine.
+     * @param cpuIds CPU cores for thread affinity
+     * @param stream true for real-time streaming, false for file output
+     * @param inputDeviceId Oboe device ID for input (-1 for system default)
+     * @param outputDeviceId Oboe device ID for output (-1 for system default)
+     */
+    Kortholt(std::vector<int> cpuIds, bool stream,
+             int32_t inputDeviceId = oboe::kUnspecified,
+             int32_t outputDeviceId = oboe::kUnspecified);
 
     virtual ~Kortholt();
 
     virtual void restart() override;
+
+    /**
+     * Set audio device IDs and restart streams.
+     * Use oboe::kUnspecified (-1) for system default device.
+     * @param inputDeviceId Oboe device ID for input
+     * @param outputDeviceId Oboe device ID for output
+     */
+    void setDeviceIds(int32_t inputDeviceId, int32_t outputDeviceId);
 
     int32_t saveWaveFile(
             const char *fileName,
@@ -30,13 +46,17 @@ public:
     void sendFloat(const char *dest, float value);
     void sendBang(const char *dest);
     void sendSymbol(const char *dest, const char *symbol);
-    
+
     // Patch management functions
     bool openPatch(const char *patch, const char *path);
     void addToSearchPath(const char *path);
 
     // Performance monitoring functions
     void logPerformanceStatistics();
+
+    // Audio recorder integration
+    void setRecorderCallback(class AudioRecorderCallback *callback);
+    void clearRecorderCallback();
 
 private:
     bool isStream;
@@ -50,6 +70,10 @@ private:
     std::shared_ptr<DefaultErrorCallback> errorCallback;
     int32_t ticksPerBuffer;
     int32_t bufferSize;
+
+    // Device selection (oboe::kUnspecified for system default)
+    int32_t mInputDeviceId;
+    int32_t mOutputDeviceId;
 
     oboe::Result createPlaybackStream();
     oboe::Result createRecordingStream();

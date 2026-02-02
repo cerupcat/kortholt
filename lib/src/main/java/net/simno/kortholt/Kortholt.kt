@@ -68,6 +68,19 @@ object Kortholt {
         fun setListReceiver(receiver: String, callback: (List<Any>) -> Unit)
         fun removeReceiver(receiver: String)
 
+        // Audio recorder integration
+        fun setRecorderCallback(recorderHandle: Long)
+        fun clearRecorderCallback()
+
+        /**
+         * Set audio device IDs for input and output.
+         * This will restart the audio streams with the new devices.
+         * Use [Builder.DEVICE_ID_UNSPECIFIED] for system default.
+         * @param inputDeviceId Oboe device ID for microphone input
+         * @param outputDeviceId Oboe device ID for speaker/headphone output
+         */
+        fun setDeviceIds(inputDeviceId: Int, outputDeviceId: Int)
+
         @ExperimentalWaveFile
         suspend fun saveWaveFile(
             outputFile: File,
@@ -85,15 +98,42 @@ object Kortholt {
         ) {
             private val applicationContext: Context = context.applicationContext
             private var dispatcher: CoroutineDispatcher = Dispatchers.IO
+            private var inputDeviceId: Int = DEVICE_ID_UNSPECIFIED
+            private var outputDeviceId: Int = DEVICE_ID_UNSPECIFIED
 
             fun dispatcher(dispatcher: CoroutineDispatcher): Builder = apply {
                 this.dispatcher = dispatcher
             }
 
+            /**
+             * Set the input audio device ID (microphone).
+             * Use [DEVICE_ID_UNSPECIFIED] for system default.
+             * Device IDs can be obtained from [android.media.AudioDeviceInfo.getId].
+             */
+            fun inputDeviceId(deviceId: Int): Builder = apply {
+                this.inputDeviceId = deviceId
+            }
+
+            /**
+             * Set the output audio device ID (speaker/headphones).
+             * Use [DEVICE_ID_UNSPECIFIED] for system default.
+             * Device IDs can be obtained from [android.media.AudioDeviceInfo.getId].
+             */
+            fun outputDeviceId(deviceId: Int): Builder = apply {
+                this.outputDeviceId = deviceId
+            }
+
             fun build(): Player = KortholtPlayer(
                 context = applicationContext,
-                dispatcher = dispatcher
+                dispatcher = dispatcher,
+                inputDeviceId = inputDeviceId,
+                outputDeviceId = outputDeviceId
             )
+
+            companion object {
+                /** Use system default audio device */
+                const val DEVICE_ID_UNSPECIFIED = -1
+            }
         }
     }
 }

@@ -2,6 +2,7 @@
 #include <oboe/Oboe.h>
 #include <android/log.h>
 #include "Kortholt.h"
+#include "OboeAudioRecorderNative.h"
 
 #define LOG_TAG "JNI_Bridge"
 // Use Oboe's existing logging macros to avoid redefinition
@@ -33,14 +34,17 @@ Java_net_simno_kortholt_KortholtPlayer_nativeCreateKortholt(
         JNIEnv *env,
         jobject /*unused*/,
         jintArray jCpuIds,
-        jboolean stream
+        jboolean stream,
+        jint inputDeviceId,
+        jint outputDeviceId
 ) {
     std::vector<int> cpuIds = convertJavaArrayToVector(env, jCpuIds);
-    LOGD("nativeCreateKortholt: stream=%s, cpuIds.size=%zu", stream ? "true" : "false", cpuIds.size());
-    
-    auto *kortholt = new(std::nothrow) Kortholt(std::move(cpuIds), stream);
+    LOGD("nativeCreateKortholt: stream=%s, cpuIds.size=%zu, inputDeviceId=%d, outputDeviceId=%d",
+         stream ? "true" : "false", cpuIds.size(), inputDeviceId, outputDeviceId);
+
+    auto *kortholt = new(std::nothrow) Kortholt(std::move(cpuIds), stream, inputDeviceId, outputDeviceId);
     jlong handle = reinterpret_cast<jlong>(kortholt);
-    
+
     LOGD("nativeCreateKortholt: created kortholt handle=%lld", (long long)handle);
     return handle;
 }
@@ -92,5 +96,59 @@ Java_net_simno_kortholt_KortholtPlayer_nativeSaveWaveFile(
     return 0;
 }
 
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeSetRecorderCallback(
+    JNIEnv * /*unused*/,
+    jobject /*unused*/,
+    jlong kortholtHandle,
+    jlong recorderHandle
+) {
+    LOGD("nativeSetRecorderCallback: kortholtHandle=%lld, recorderHandle=%lld",
+         (long long)kortholtHandle, (long long)recorderHandle);
+
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    auto *recorder = reinterpret_cast<OboeAudioRecorderNative *>(recorderHandle);
+
+    if (kortholt != nullptr && recorder != nullptr) {
+        kortholt->setRecorderCallback(recorder);
+    } else {
+        LOGE("nativeSetRecorderCallback: null kortholt or recorder");
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeClearRecorderCallback(
+    JNIEnv * /*unused*/,
+    jobject /*unused*/,
+    jlong kortholtHandle
+) {
+    LOGD("nativeClearRecorderCallback: kortholtHandle=%lld", (long long)kortholtHandle);
+
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    if (kortholt != nullptr) {
+        kortholt->clearRecorderCallback();
+    } else {
+        LOGE("nativeClearRecorderCallback: null kortholt");
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeSetDeviceIds(
+    JNIEnv * /*unused*/,
+    jobject /*unused*/,
+    jlong kortholtHandle,
+    jint inputDeviceId,
+    jint outputDeviceId
+) {
+    LOGD("nativeSetDeviceIds: kortholtHandle=%lld, inputDeviceId=%d, outputDeviceId=%d",
+         (long long)kortholtHandle, inputDeviceId, outputDeviceId);
+
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    if (kortholt != nullptr) {
+        kortholt->setDeviceIds(inputDeviceId, outputDeviceId);
+    } else {
+        LOGE("nativeSetDeviceIds: null kortholt");
+    }
+}
 
 } // extern "C"
