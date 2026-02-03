@@ -274,19 +274,18 @@ set_source_files_properties(${PD_EXTERNALS_PATH}/maxlib/history.c PROPERTIES COM
 
 ### BEGIN INCLUDE OBOE ###
 
-set(OBOE_DIR ./oboe)
-add_subdirectory(${OBOE_DIR} ./oboe)
-include_directories(
-    ${OBOE_DIR}/include
-    ${OBOE_DIR}/samples/shared
-    ${OBOE_DIR}/samples/hello-oboe/src/main/cpp
-    ${OBOE_DIR}/apps/OboeTester/app/src/main/cpp/util
-)
+# Find Oboe package provided by prefab (from Maven dependency)
+find_package(oboe REQUIRED CONFIG)
 
-# Debug utilities
-set(DEBUG_UTILS_PATH "${OBOE_DIR}/samples/debug-utils")
-set(DEBUG_UTILS_SOURCES ${DEBUG_UTILS_PATH}/trace.cpp)
-include_directories(${DEBUG_UTILS_PATH})
+# Include our local copy of Oboe sample utilities
+set(OBOE_UTILS_PATH ./oboe_utils)
+include_directories(${OBOE_UTILS_PATH})
+
+# Oboe utilities that we need from the samples
+set(OBOE_UTILS_SOURCES
+    ${OBOE_UTILS_PATH}/trace.cpp
+    ${OBOE_UTILS_PATH}/LatencyTuningCallback.cpp
+)
 
 ### END INCLUDE OBOE ###
 
@@ -299,7 +298,6 @@ set(APP_SOURCES
     dr_wav_impl.cpp
     OboeAudioRecorderNative.cpp
     OboeAudioRecorderJNI.cpp
-    ${OBOE_DIR}/samples/hello-oboe/src/main/cpp/LatencyTuningCallback.cpp
 )
 
 # Real-time safe headers are included automatically
@@ -307,7 +305,7 @@ set(APP_SOURCES
 add_library(
     kortholt
     SHARED
-    ${DEBUG_UTILS_SOURCES}
+    ${OBOE_UTILS_SOURCES}
     ${APP_SOURCES}
 )
 
@@ -326,7 +324,7 @@ target_include_directories(
     libpd/libpd_wrapper/util
 )
 
-target_link_libraries(kortholt android log libpd oboe)
+target_link_libraries(kortholt android log libpd oboe::oboe)
 
 # Stable compiler flags optimized for broad device compatibility
 target_compile_options(kortholt PRIVATE

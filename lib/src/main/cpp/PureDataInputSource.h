@@ -14,7 +14,7 @@ extern "C" {
 }
 
 // Include Oboe IRenderableAudio interface
-#include "./oboe/samples/shared/IRenderableAudio.h"
+#include <IRenderableAudio.h>
 
 /**
  * Real-time safe Pure Data input source using lock-free ring buffers.

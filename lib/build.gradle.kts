@@ -11,6 +11,11 @@ android {
     namespace = "net.simno.kortholt"
     compileSdk = 35
     ndkVersion = "28.1.13356709"
+
+    buildFeatures {
+        prefab = true
+    }
+
     defaultConfig {
         minSdk = 30
         externalNativeBuild {
@@ -68,6 +73,9 @@ android {
 }
 
 dependencies {
+    // Oboe audio library (prefab package for native code)
+    implementation("com.google.oboe:oboe:1.10.0")
+
     api("org.jetbrains.kotlinx:kotlinx-coroutines-core:1.9.0")
     api("androidx.annotation:annotation:1.9.1")
     implementation("androidx.core:core-ktx:1.16.0")
