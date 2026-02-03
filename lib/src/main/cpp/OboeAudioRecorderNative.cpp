@@ -2,37 +2,26 @@
 #include <android/log.h>
 #include <cstring>
 #include <chrono>
+#include <algorithm>
 
 #define LOG_TAG "OboeAudioRecorderNative"
 #define LOGD(...) __android_log_print(ANDROID_LOG_DEBUG, LOG_TAG, __VA_ARGS__)
 #define LOGE(...) __android_log_print(ANDROID_LOG_ERROR, LOG_TAG, __VA_ARGS__)
 #define LOGI(...) __android_log_print(ANDROID_LOG_INFO, LOG_TAG, __VA_ARGS__)
 
-// FileOutputStream implementation
-OboeAudioRecorderNative::FileOutputStream::FileOutputStream(const std::string& filePath) {
-    file_.open(filePath, std::ios::binary | std::ios::out);
-    if (!file_.is_open()) {
-        LOGE("Failed to open file: %s", filePath.c_str());
-    } else {
-        LOGD("Opened file for writing: %s", filePath.c_str());
+namespace {
+    // Convert float samples in range [-1.0, 1.0] to int16 PCM format.
+    // Clamps values to prevent overflow during conversion.
+    inline int16_t floatToInt16(float sample) {
+        sample = std::clamp(sample, -1.0f, 1.0f);
+        return static_cast<int16_t>(sample * 32767.0f);
     }
-}
 
-OboeAudioRecorderNative::FileOutputStream::~FileOutputStream() {
-    close();
-}
-
-void OboeAudioRecorderNative::FileOutputStream::write(uint8_t b) {
-    if (file_.is_open()) {
-        file_.put(static_cast<char>(b));
-    }
-}
-
-void OboeAudioRecorderNative::FileOutputStream::close() {
-    if (file_.is_open()) {
-        file_.flush();
-        file_.close();
-        LOGD("File closed");
+    // Convert a buffer of float samples to int16 in place.
+    void convertFloatToInt16(const float* source, int16_t* dest, size_t count) {
+        for (size_t i = 0; i < count; ++i) {
+            dest[i] = floatToInt16(source[i]);
+        }
     }
 }
 
@@ -62,20 +51,12 @@ bool OboeAudioRecorderNative::startRecording(const std::string& filePath,
          filePath.c_str(), sampleRate, channelCount, bitsPerSample);
 
     // Validate parameters
-    if (sampleRate < 8000 || sampleRate > 192000) {
-        LOGE("Invalid sample rate: %d", sampleRate);
-        state_.store(State::IDLE);
-        return false;
-    }
+    const bool isValidParams = sampleRate >= 8000 && sampleRate <= 192000 &&
+                               channelCount >= 1 && channelCount <= 2 &&
+                               (bitsPerSample == 16 || bitsPerSample == 24);
 
-    if (channelCount < 1 || channelCount > 2) {
-        LOGE("Invalid channel count: %d", channelCount);
-        state_.store(State::IDLE);
-        return false;
-    }
-
-    if (bitsPerSample != 16 && bitsPerSample != 24) {
-        LOGE("Invalid bits per sample: %d (must be 16 or 24)", bitsPerSample);
+    if (!isValidParams) {
+        LOGE("Invalid parameters: sr=%d, ch=%d, bits=%d", sampleRate, channelCount, bitsPerSample);
         state_.store(State::IDLE);
         return false;
     }
@@ -88,22 +69,25 @@ bool OboeAudioRecorderNative::startRecording(const std::string& filePath,
     // Create ring buffer
     ringBuffer_ = std::make_unique<AudioRingBuffer>(RING_BUFFER_SIZE);
 
-    // Create output stream
-    outputStream_ = std::make_unique<FileOutputStream>(filePath);
-    if (!outputStream_->isOpen()) {
-        LOGE("Failed to open output file");
+    // Initialize dr_wav for writing
+    drwav_data_format format;
+    format.container = drwav_container_riff;
+    format.channels = channelCount;
+    format.sampleRate = sampleRate;
+
+    // Match format to bitsPerSample requested by Kotlin
+    // Note: dr_wav handles both 16 and 24-bit PCM with DR_WAVE_FORMAT_PCM
+    format.format = DR_WAVE_FORMAT_PCM;
+    format.bitsPerSample = bitsPerSample;
+
+    if (!drwav_init_file_write(&wav_, filePath.c_str(), &format, nullptr)) {
+        LOGE("Failed to initialize dr_wav for file: %s", filePath.c_str());
         state_.store(State::IDLE);
         return false;
     }
 
-    // Create WAV writer
-    waveWriter_ = std::make_unique<WaveFileWriter>(outputStream_.get());
-    waveWriter_->setFrameRate(sampleRate);
-    waveWriter_->setSamplesPerFrame(channelCount);
-    waveWriter_->setBitsPerSample(bitsPerSample);
-
-    // Note: We don't call setFrameCount() - WaveFileWriter will use INT32_MAX
-    // and we'll update the header when we stop recording
+    wavInitialized_ = true;
+    LOGD("dr_wav initialized successfully");
 
     // Reset statistics
     totalFramesWritten_.store(0, std::memory_order_release);
@@ -135,8 +119,11 @@ bool OboeAudioRecorderNative::stopRecording() {
     }
 
     // Cleanup
-    waveWriter_.reset();
-    outputStream_.reset();
+    if (wavInitialized_) {
+        drwav_uninit(&wav_);  // Automatically finalizes WAV header!
+        wavInitialized_ = false;
+        LOGD("dr_wav uninitialized and WAV file finalized");
+    }
     ringBuffer_.reset();
     writerThread_.reset();
 
@@ -217,7 +204,8 @@ void OboeAudioRecorderNative::writerThreadFunction() {
 
     // Allocate working buffer
     const size_t READ_CHUNK_SIZE = 512;
-    auto audioBuffer = std::make_unique<float[]>(READ_CHUNK_SIZE);
+    auto floatBuffer = std::make_unique<float[]>(READ_CHUNK_SIZE);
+    auto int16Buffer = std::make_unique<int16_t[]>(READ_CHUNK_SIZE);
 
     while (state_.load(std::memory_order_acquire) == State::RECORDING ||
            state_.load(std::memory_order_acquire) == State::PAUSED) {
@@ -234,14 +222,23 @@ void OboeAudioRecorderNative::writerThreadFunction() {
         const size_t toRead = std::min(available, READ_CHUNK_SIZE);
 
         if (toRead > 0) {
-            const size_t read = ringBuffer_->read(audioBuffer.get(), toRead);
+            const size_t read = ringBuffer_->read(floatBuffer.get(), toRead);
 
-            if (read > 0 && waveWriter_) {
-                // Write to WAV file
-                waveWriter_->write(audioBuffer.get(), 0, static_cast<int32_t>(read));
+            if (read > 0 && wavInitialized_) {
+                // Convert float to int16 for PCM format
+                convertFloatToInt16(floatBuffer.get(), int16Buffer.get(), read);
+
+                // Write to WAV file using dr_wav
+                const size_t numFrames = read / channelCount_;
+                const drwav_uint64 framesWritten = drwav_write_pcm_frames(&wav_, numFrames, int16Buffer.get());
 
                 // Update statistics
-                totalFramesWritten_.fetch_add(read / channelCount_, std::memory_order_relaxed);
+                totalFramesWritten_.fetch_add(framesWritten, std::memory_order_relaxed);
+
+                if (framesWritten != numFrames) {
+                    LOGE("Warning: Expected to write %zu frames but wrote %llu",
+                         numFrames, static_cast<unsigned long long>(framesWritten));
+                }
             }
         } else {
             // No data available - sleep briefly to avoid spinning
@@ -253,43 +250,33 @@ void OboeAudioRecorderNative::writerThreadFunction() {
     LOGD("Flushing remaining data...");
     flushRemainingData();
 
-    // Close WAV writer to finalize file
-    if (waveWriter_) {
-        waveWriter_->close();
-    }
-
-    if (outputStream_) {
-        outputStream_->close();
-    }
-
     LOGD("Writer thread finished");
 }
 
 void OboeAudioRecorderNative::flushRemainingData() {
-    if (!ringBuffer_ || !waveWriter_) {
+    if (!ringBuffer_ || !wavInitialized_) {
         return;
     }
 
     const size_t BUFFER_SIZE = 1024;
-    auto buffer = std::make_unique<float[]>(BUFFER_SIZE);
+    auto floatBuffer = std::make_unique<float[]>(BUFFER_SIZE);
+    auto int16Buffer = std::make_unique<int16_t[]>(BUFFER_SIZE);
 
     // Read and write all remaining data
     size_t totalFlushed = 0;
-    while (true) {
-        const size_t available = ringBuffer_->availableForRead();
-        if (available == 0) {
-            break;
-        }
-
+    size_t available;
+    while ((available = ringBuffer_->availableForRead()) > 0) {
         const size_t toRead = std::min(available, BUFFER_SIZE);
-        const size_t read = ringBuffer_->read(buffer.get(), toRead);
+        const size_t read = ringBuffer_->read(floatBuffer.get(), toRead);
 
-        if (read > 0) {
-            waveWriter_->write(buffer.get(), 0, static_cast<int32_t>(read));
-            totalFlushed += read;
-        } else {
-            break;
-        }
+        if (read == 0) break;
+
+        // Convert float to int16 for PCM format
+        convertFloatToInt16(floatBuffer.get(), int16Buffer.get(), read);
+
+        const size_t numFrames = read / channelCount_;
+        drwav_write_pcm_frames(&wav_, numFrames, int16Buffer.get());
+        totalFlushed += read;
     }
 
     LOGD("Flushed %zu samples", totalFlushed);

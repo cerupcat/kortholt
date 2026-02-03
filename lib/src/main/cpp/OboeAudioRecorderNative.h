@@ -5,10 +5,9 @@
 #include <memory>
 #include <thread>
 #include <string>
-#include <fstream>
 #include "AudioRecorderCallback.h"
 #include "LockFreeRingBuffer.h"
-#include "WaveFileWriter.h"
+#include "dr_wav.h"
 
 /**
  * Native audio recorder that captures PCM data from PureDataInputSource
@@ -17,7 +16,7 @@
  * Architecture:
  * - Audio callback (real-time) writes to lock-free ring buffer
  * - Background writer thread reads from buffer and writes to file
- * - Uses existing WaveFileWriter for WAV format handling
+ * - Uses dr_wav for robust WAV format handling with automatic header finalization
  *
  * This ensures the audio callback remains fast and lock-free while
  * file I/O happens on a separate thread.
@@ -120,22 +119,9 @@ private:
     // Writer thread
     std::unique_ptr<std::thread> writerThread_;
 
-    // WAV file output stream
-    class FileOutputStream : public WaveFileOutputStream {
-    public:
-        explicit FileOutputStream(const std::string& filePath);
-        ~FileOutputStream() override;
-
-        void write(uint8_t b) override;
-        bool isOpen() const { return file_.is_open(); }
-        void close();
-
-    private:
-        std::ofstream file_;
-    };
-
-    std::unique_ptr<FileOutputStream> outputStream_;
-    std::unique_ptr<WaveFileWriter> waveWriter_;
+    // dr_wav handle for WAV file writing
+    drwav wav_;
+    bool wavInitialized_{false};
 
     // Statistics
     std::atomic<uint64_t> totalFramesWritten_{0};

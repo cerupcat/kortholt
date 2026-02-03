@@ -1,7 +1,7 @@
 plugins {
     id("com.android.library")
     id("org.jetbrains.kotlin.android")
-    id("kotlin-kapt")
+    alias(libs.plugins.ksp)
     id("dagger.hilt.android.plugin")
     id("maven-publish")
     id("signing")
@@ -20,7 +20,20 @@ android {
                     "-DANDROID_STL=c++_shared",
                     "-DANDROID_SUPPORT_FLEXIBLE_PAGE_SIZES=ON"
                 )
-                abiFilters("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+                // For debug builds, only build arm64-v8a to save ~2-3 minutes
+                // Most modern devices/emulators use arm64-v8a
+                abiFilters("arm64-v8a")
+            }
+        }
+    }
+
+    buildTypes {
+        getByName("release") {
+            externalNativeBuild {
+                cmake {
+                    // Release builds include all ABIs for maximum device compatibility
+                    abiFilters("armeabi-v7a", "arm64-v8a", "x86", "x86_64")
+                }
             }
         }
     }
@@ -60,10 +73,10 @@ dependencies {
     implementation("androidx.core:core-ktx:1.16.0")
     implementation("com.getkeepsafe.relinker:relinker:1.4.5")
     implementation("net.lingala.zip4j:zip4j:2.11.5")
-    
-    // Hilt dependency injection
+
+    // Hilt dependency injection - migrated from KAPT to KSP for faster builds
     implementation("com.google.dagger:hilt-android:2.51.1")
-    kapt("com.google.dagger:hilt-compiler:2.51.1")
+    add("ksp", "com.google.dagger:hilt-compiler:2.51.1")
 }
 
 val siteUrl = "https://github.com/simonnorberg/kortholt"

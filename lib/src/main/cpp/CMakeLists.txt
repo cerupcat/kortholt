@@ -296,10 +296,10 @@ set(APP_SOURCES
     PureDataSource.cpp
     PureDataInputSource.cpp
     Kortholt.cpp
+    dr_wav_impl.cpp
     OboeAudioRecorderNative.cpp
     OboeAudioRecorderJNI.cpp
     ${OBOE_DIR}/samples/hello-oboe/src/main/cpp/LatencyTuningCallback.cpp
-    ${OBOE_DIR}/apps/OboeTester/app/src/main/cpp/util/WaveFileWriter.cpp
 )
 
 # Real-time safe headers are included automatically

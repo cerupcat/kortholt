@@ -131,8 +131,11 @@ object Kortholt {
             )
 
             companion object {
-                /** Use system default audio device */
-                const val DEVICE_ID_UNSPECIFIED = -1
+                /**
+                 * Use system default audio device.
+                 * This value must match oboe::kUnspecified (0) in the native layer.
+                 */
+                const val DEVICE_ID_UNSPECIFIED = 0
             }
         }
     }
