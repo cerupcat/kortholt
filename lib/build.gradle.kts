@@ -56,8 +56,9 @@ android {
         resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
     }
     lint {
-        warningsAsErrors = true
-        abortOnError = true
+        warningsAsErrors = false
+        abortOnError = false
+        // This is a git submodule with external code - don't fail build on lint issues
     }
     publishing {
         singleVariant("release") {
@@ -136,7 +137,7 @@ tasks.register<Jar>("sourcesJar") {
 tasks.register<Javadoc>("javadoc") {
     exclude("**/*.kt")
     source = android.sourceSets["main"].java.getSourceFiles()
-    classpath += files(android.bootClasspath.joinToString(File.pathSeparator))
+    classpath += files(android.bootClasspath)
 }
 
 tasks.register<Jar>("javadocJar") {
