@@ -47,6 +47,7 @@ private:
     // Statistics (atomic for thread safety)
     std::atomic<uint64_t> totalCallbacks_{0};
     std::atomic<uint64_t> failedCallbacks_{0};
+    std::atomic<uint64_t> nonFiniteOutputs_{0};
 
 public:
     explicit PureDataSource(int32_t ticksPerBuffer);
@@ -112,6 +113,7 @@ public:
     struct Statistics {
         uint64_t totalCallbacks;
         uint64_t failedCallbacks;
+        uint64_t nonFiniteOutputs;
         double failurePercentage;
     };
     Statistics getStatistics() const;

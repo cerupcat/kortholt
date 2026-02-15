@@ -170,7 +170,6 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
 
     // Robust frame count validation with graceful degradation
     if (static_cast<size_t>(numFrames) > maxFramesPerCallback_) {
-        LOGW("Frame count %d exceeds maximum %zu, clamping for stability", numFrames, maxFramesPerCallback_);
         numFrames = static_cast<int32_t>(maxFramesPerCallback_);
         failedCallbacks_.fetch_add(1, std::memory_order_relaxed);
     }
@@ -180,9 +179,8 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
     const int32_t alignedFrames = (numFrames / blockSize) * blockSize;
 
     if (alignedFrames != numFrames) {
-        LOGW("Frame count %d not aligned to block size %d, using %d frames",
-             numFrames, blockSize, alignedFrames);
         numFrames = alignedFrames;
+        failedCallbacks_.fetch_add(1, std::memory_order_relaxed);
         if (numFrames <= 0) {
             // If we can't process any complete blocks, output silence
             const int32_t outputChans = outputChannels_.load(std::memory_order_acquire);
@@ -197,7 +195,6 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         processingSucceeded = processPdTicks(numFrames, audioData);
     } catch (...) {
         // Catch any exceptions to prevent audio thread crashes
-        LOGE("Exception in Pure Data processing, outputting silence");
         processingSucceeded = false;
     }
 
@@ -211,8 +208,10 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         const uint64_t totalCalls = totalCallbacks_.load(std::memory_order_relaxed);
         if (totalCalls % 1000 == 0) {  // Log every 1000 calls
             const uint64_t failures = failedCallbacks_.load(std::memory_order_relaxed);
-            LOGW("Audio processing degraded: %llu failures out of %llu calls",
+            const uint64_t nonFinite = nonFiniteOutputs_.load(std::memory_order_relaxed);
+            LOGW("Audio stats: %llu failures, %llu non-finite out of %llu calls",
                  static_cast<unsigned long long>(failures),
+                 static_cast<unsigned long long>(nonFinite),
                  static_cast<unsigned long long>(totalCalls));
         }
     }
@@ -286,7 +285,7 @@ bool PureDataSource::processPdTicks(int32_t numFrames, float *outputData) {
         }
 
         if (!outputValid) {
-            LOGW("Pure Data generated non-finite audio values, replaced with silence");
+            nonFiniteOutputs_.fetch_add(1, std::memory_order_relaxed);
         }
 
         return true;
@@ -362,9 +361,12 @@ PureDataSource::Statistics PureDataSource::getStatistics() const {
     const uint64_t total = totalCallbacks_.load(std::memory_order_acquire);
     const uint64_t failed = failedCallbacks_.load(std::memory_order_acquire);
 
+    const uint64_t nonFinite = nonFiniteOutputs_.load(std::memory_order_acquire);
+
     Statistics stats;
     stats.totalCallbacks = total;
     stats.failedCallbacks = failed;
+    stats.nonFiniteOutputs = nonFinite;
     stats.failurePercentage = (total > 0) ? (static_cast<double>(failed) / total * 100.0) : 0.0;
 
     return stats;
@@ -373,6 +375,7 @@ PureDataSource::Statistics PureDataSource::getStatistics() const {
 void PureDataSource::resetStatistics() {
     totalCallbacks_.store(0, std::memory_order_relaxed);
     failedCallbacks_.store(0, std::memory_order_relaxed);
+    nonFiniteOutputs_.store(0, std::memory_order_relaxed);
 }
 
 void PureDataSource::applyDeviceSpecificTuning(int32_t sampleRate, int32_t channelCount) {

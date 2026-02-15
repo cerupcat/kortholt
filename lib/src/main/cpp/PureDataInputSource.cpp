@@ -115,7 +115,6 @@ void PureDataInputSource::renderAudio(float *audioData, int32_t numFrames) {
     const int32_t framesToProcess = std::min(numFrames, maxAllowedFrames);
 
     if (framesToProcess != numFrames) {
-        LOGW("Frame count clamped from %d to %d to prevent buffer overrun", numFrames, framesToProcess);
         droppedFrames_.fetch_add(numFrames - framesToProcess, std::memory_order_relaxed);
     }
 
