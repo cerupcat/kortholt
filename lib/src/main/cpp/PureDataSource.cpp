@@ -275,6 +275,22 @@ bool PureDataSource::processPdTicks(int32_t numFrames, float *outputData) {
 
         libpd_process_float(ticks, pdInputBuffer, outputData);
 
+        // Periodically check if PD is producing non-zero output
+        const uint64_t callCount = totalCallbacks_.load(std::memory_order_relaxed);
+        if (callCount % 5000 == 1) {
+            float maxAbs = 0.0f;
+            const size_t totalSamples = numFrames * outputChans;
+            for (size_t i = 0; i < totalSamples; ++i) {
+                float absVal = std::fabs(outputData[i]);
+                if (absVal > maxAbs) maxAbs = absVal;
+            }
+            LOGD("DIAG: callback #%llu, frames=%d, ticks=%d, inputChans=%d, outputChans=%d, "
+                 "pdInput=%s, maxAbsSample=%.6f",
+                 static_cast<unsigned long long>(callCount), numFrames, ticks,
+                 inputChans, outputChans,
+                 pdInputBuffer ? "valid" : "NULL", maxAbs);
+        }
+
         // Post-process validation: check for NaN/infinity in output
         bool outputValid = true;
         for (size_t i = 0; i < numFrames * outputChans; ++i) {

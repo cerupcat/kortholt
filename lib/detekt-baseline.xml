@@ -1,0 +1,14 @@
+<?xml version="1.0" ?>
+<SmellBaseline>
+  <ManuallySuppressedIssues/>
+  <CurrentIssues>
+    <ID>ComplexCondition:KortholtPlayer.kt$KortholtPlayer$(hadFloatReceiver || hadListReceiver) &amp;&amp; !floatReceivers.containsKey(receiver) &amp;&amp; !listReceivers.containsKey(receiver)</ID>
+    <ID>MagicNumber:KortholtPlayer.kt$KortholtPlayer$10</ID>
+    <ID>MaxLineLength:KortholtPlayer.kt$KortholtPlayer$android.util.Log.d("KortholtPlayer", "Creating stream with inputDeviceId=$inputDeviceId, outputDeviceId=$outputDeviceId")</ID>
+    <ID>MaxLineLength:KortholtPlayer.kt$KortholtPlayer.&lt;no name provided&gt;$android.util.Log.d("KortholtPlayer", "Custom PdBaseLoader: loading pd and pdnative (Oboe implementation)")</ID>
+    <ID>TooGenericExceptionCaught:KortholtPlayer.kt$KortholtPlayer$e: Exception</ID>
+    <ID>TooGenericExceptionCaught:KortholtPlayer.kt$KortholtPlayer.&lt;no name provided&gt;$e: Exception</ID>
+    <ID>TooManyFunctions:Kortholt.kt$Kortholt$Player</ID>
+    <ID>TooManyFunctions:KortholtPlayer.kt$KortholtPlayer : Player</ID>
+  </CurrentIssues>
+</SmellBaseline>

@@ -151,4 +151,36 @@ Java_net_simno_kortholt_KortholtPlayer_nativeSetDeviceIds(
     }
 }
 
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeStartStreams(
+    JNIEnv * /*unused*/,
+    jobject /*unused*/,
+    jlong kortholtHandle
+) {
+    LOGD("nativeStartStreams: handle=%lld", (long long)kortholtHandle);
+
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    if (kortholt != nullptr) {
+        kortholt->startStreams();
+    } else {
+        LOGE("nativeStartStreams: null kortholt");
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeEnableMicInput(
+    JNIEnv * /*unused*/,
+    jobject /*unused*/,
+    jlong kortholtHandle
+) {
+    LOGD("nativeEnableMicInput: handle=%lld", (long long)kortholtHandle);
+
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    if (kortholt != nullptr) {
+        kortholt->enableMicInput();
+    } else {
+        LOGE("nativeEnableMicInput: null kortholt");
+    }
+}
+
 } // extern "C"

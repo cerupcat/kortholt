@@ -53,12 +53,52 @@ Kortholt::~Kortholt() {
 }
 
 void Kortholt::restart() {
+    bool hadInput = mInputEnabled;
+    LOGD("restart: hadInput=%s", hadInput ? "true" : "false");
+
+    // Stop existing streams without re-initializing Pure Data.
+    // PD state (patch, DSP, receivers) persists — we only need new Oboe streams
+    // pointed at the (possibly new) device IDs.
     stop();
-    start();
+
+    // Recreate the output stream with current device IDs
+    {
+        std::lock_guard<std::mutex> lock(streamLock);
+        auto outputResult = createPlaybackStream();
+        if (outputResult != oboe::Result::OK) {
+            LOGE("restart: Failed to recreate output stream: %s",
+                 oboe::convertToText(outputResult));
+            return;
+        }
+
+        if (isStream) {
+            outputCallback->reset();
+            outputCallback->setSource(pureDataSource);
+            outputStream->setBufferSizeInFrames(bufferSize);
+        }
+    }
+
+    // Start the output stream
+    startStreams();
+
+    // Re-enable mic input if it was active before
+    if (hadInput) {
+        enableMicInput();
+    }
 }
 
 void Kortholt::setDeviceIds(int32_t inputDeviceId, int32_t outputDeviceId) {
-    LOGD("setDeviceIds: inputDeviceId=%d, outputDeviceId=%d", inputDeviceId, outputDeviceId);
+    LOGD("setDeviceIds: inputDeviceId=%d, outputDeviceId=%d (current: input=%d, output=%d)",
+         inputDeviceId, outputDeviceId, mInputDeviceId, mOutputDeviceId);
+
+    // Skip restart if device IDs haven't actually changed.
+    // This prevents an unnecessary restart on initial preference emission
+    // which would race with concurrent libpd message sends.
+    if (inputDeviceId == mInputDeviceId && outputDeviceId == mOutputDeviceId) {
+        LOGD("setDeviceIds: No change, skipping restart");
+        return;
+    }
+
     mInputDeviceId = inputDeviceId;
     mOutputDeviceId = outputDeviceId;
     // Restart streams to apply new device selection
@@ -215,67 +255,137 @@ void Kortholt::start() {
     std::lock_guard<std::mutex> lock(streamLock);
     LOGD("start: Beginning Kortholt initialization (isStream=%s)", isStream ? "true" : "false");
 
-    // Create output stream for tone generation
+    // Create output stream for tone generation (no permission required)
     auto outputResult = createPlaybackStream();
-    if (outputResult == oboe::Result::OK) {
-        LOGD("start: Output stream created successfully");
-
-        // Create input stream for tuner
-        auto inputResult = createRecordingStream();
-        if (inputResult == oboe::Result::OK) {
-            LOGD("start: Both streams created successfully, initializing Pure Data");
-
-            // Configure Pure Data with input channel count and set input source
-            pureDataSource->setInputChannels(inputStream->getChannelCount());
-            pureDataSource->setInputSource(pureDataInputSource);
-
-            // Initialize input source with input stream settings (must be done first)
-            if (!pureDataInputSource->init(inputStream->getSampleRate(), inputStream->getChannelCount())) {
-                LOGE("start: Failed to initialize PureDataInputSource");
-                return;
-            }
-            LOGD("start: Input source initialized successfully");
-
-            // Initialize Pure Data with output stream settings
-            if (!pureDataSource->init(outputStream->getSampleRate(), outputStream->getChannelCount())) {
-                LOGE("start: Failed to initialize PureDataSource");
-                return;
-            }
-            LOGD("start: Pure Data source initialized successfully");
-
-            if (isStream) {
-                LOGD("start: Configuring streams for real-time audio");
-
-                // Configure output stream
-                outputCallback->reset();
-                outputCallback->setSource(pureDataSource);
-                outputStream->setBufferSizeInFrames(bufferSize);
-
-                // Configure input stream with input audio source
-                inputCallback->reset();
-                inputCallback->setSource(pureDataInputSource);
-                inputStream->setBufferSizeInFrames(bufferSize);
-
-                // Start both streams
-                auto outputStartResult = outputStream->start();
-                auto inputStartResult = inputStream->start();
-
-                if (outputStartResult == oboe::Result::OK && inputStartResult == oboe::Result::OK) {
-                    LOGD("start: Both streams started successfully");
-                    LOGD("  Output State: %s", oboe::convertToText(outputStream->getState()));
-                    LOGD("  Input State: %s", oboe::convertToText(inputStream->getState()));
-                } else {
-                    LOGE("start: Failed to start streams - Output: %s, Input: %s",
-                         oboe::convertToText(outputStartResult), oboe::convertToText(inputStartResult));
-                }
-            } else {
-                LOGD("start: Streams configured for file output (not real-time)");
-            }
-        } else {
-            LOGE("start: Failed to create input stream: %s", oboe::convertToText(inputResult));
-        }
-    } else {
+    if (outputResult != oboe::Result::OK) {
         LOGE("start: Failed to create output stream: %s", oboe::convertToText(outputResult));
+        return;
+    }
+    LOGD("start: Output stream created successfully");
+
+    // Configure Pure Data with 1 input channel (anticipating future mic input)
+    // and set up the input source so PD is ready when mic becomes available.
+    // PureDataInputSource provides silence until the input stream is started.
+    pureDataSource->setInputChannels(1);
+    pureDataSource->setInputSource(pureDataInputSource);
+
+    // Initialize input source using the output stream's sample rate
+    // (will be re-used when actual input stream is created)
+    if (!pureDataInputSource->init(outputStream->getSampleRate(), 1)) {
+        LOGE("start: Failed to initialize PureDataInputSource");
+        return;
+    }
+    LOGD("start: Input source initialized (providing silence until mic enabled)");
+
+    // Initialize Pure Data with output stream settings
+    if (!pureDataSource->init(outputStream->getSampleRate(), outputStream->getChannelCount())) {
+        LOGE("start: Failed to initialize PureDataSource");
+        return;
+    }
+    LOGD("start: Pure Data source initialized successfully");
+
+    if (isStream) {
+        // Configure output callback but do NOT start the stream yet.
+        // Streams must be started AFTER the patch is opened to avoid a race
+        // between libpd_process_float (audio thread) and libpd_openfile (Java thread).
+        outputCallback->reset();
+        outputCallback->setSource(pureDataSource);
+        outputStream->setBufferSizeInFrames(bufferSize);
+        LOGD("start: Output stream configured, waiting for startStreams()");
+    } else {
+        LOGD("start: Configured for file output (not real-time)");
+    }
+}
+
+void Kortholt::startStreams() {
+    std::lock_guard<std::mutex> lock(streamLock);
+    LOGD("startStreams: Starting output stream");
+
+    if (!isStream || !outputStream) {
+        LOGD("startStreams: No stream to start (isStream=%s, outputStream=%s)",
+             isStream ? "true" : "false", outputStream ? "valid" : "null");
+        return;
+    }
+
+    auto outputStartResult = outputStream->start();
+    if (outputStartResult == oboe::Result::OK) {
+        LOGD("startStreams: Output stream started successfully");
+        LOGD("  Output State: %s", oboe::convertToText(outputStream->getState()));
+    } else {
+        LOGE("startStreams: Failed to start output stream: %s",
+             oboe::convertToText(outputStartResult));
+    }
+}
+
+void Kortholt::enableMicInput() {
+    std::lock_guard<std::mutex> lock(streamLock);
+    LOGD("enableMicInput: Creating and starting input stream");
+
+    if (!isStream) {
+        LOGD("enableMicInput: Not in stream mode, skipping");
+        return;
+    }
+
+    // If input stream already exists and is running, skip
+    if (inputStream && inputStream->getState() == oboe::StreamState::Started) {
+        LOGD("enableMicInput: Input stream already running");
+        mInputEnabled = true;
+        return;
+    }
+
+    // Close existing input stream if any
+    stopAndCloseStream(inputStream, "input");
+    inputStream.reset();
+
+    // Create the recording stream (requires RECORD_AUDIO permission)
+    auto inputResult = createRecordingStream();
+    if (inputResult != oboe::Result::OK) {
+        LOGE("enableMicInput: Failed to create input stream: %s",
+             oboe::convertToText(inputResult));
+        return;
+    }
+
+    // Configure and start the input stream.
+    // This is safe while the output stream is running because
+    // PureDataInputSource only writes to a lock-free ring buffer
+    // that PureDataSource reads from — no PD state is modified.
+    inputCallback->reset();
+    inputCallback->setSource(pureDataInputSource);
+    inputStream->setBufferSizeInFrames(bufferSize);
+
+    auto inputStartResult = inputStream->start();
+    if (inputStartResult == oboe::Result::OK) {
+        mInputEnabled = true;
+        LOGD("enableMicInput: Input stream started successfully");
+        LOGD("  Input State: %s", oboe::convertToText(inputStream->getState()));
+    } else {
+        LOGE("enableMicInput: Failed to start input stream: %s",
+             oboe::convertToText(inputStartResult));
+    }
+}
+
+void Kortholt::stopAndCloseStream(std::shared_ptr<oboe::AudioStream> &stream,
+                                   const char *label) {
+    if (!stream || stream->getState() == oboe::StreamState::Closed) {
+        LOGD("stop: %s stream already closed or null", label);
+        return;
+    }
+
+    LOGD("stop: %s stream state before stop: %s",
+         label, oboe::convertToText(stream->getState()));
+
+    auto stopResult = stream->stop();
+    if (stopResult == oboe::Result::OK) {
+        LOGD("stop: %s stream stopped successfully", label);
+    } else {
+        LOGE("stop: Failed to stop %s stream: %s", label, oboe::convertToText(stopResult));
+    }
+
+    auto closeResult = stream->close();
+    if (closeResult == oboe::Result::OK) {
+        LOGD("stop: %s stream closed successfully", label);
+    } else {
+        LOGE("stop: Failed to close %s stream: %s", label, oboe::convertToText(closeResult));
     }
 }
 
@@ -283,45 +393,8 @@ void Kortholt::stop() {
     std::lock_guard<std::mutex> lock(streamLock);
     LOGD("stop: Stopping Kortholt");
 
-    // Stop output stream
-    if (outputStream && outputStream->getState() != oboe::StreamState::Closed) {
-        LOGD("stop: Output stream state before stop: %s", oboe::convertToText(outputStream->getState()));
-        auto stopResult = outputStream->stop();
-        if (stopResult == oboe::Result::OK) {
-            LOGD("stop: Output stream stopped successfully");
-        } else {
-            LOGE("stop: Failed to stop output stream: %s", oboe::convertToText(stopResult));
-        }
-
-        auto closeResult = outputStream->close();
-        if (closeResult == oboe::Result::OK) {
-            LOGD("stop: Output stream closed successfully");
-        } else {
-            LOGE("stop: Failed to close output stream: %s", oboe::convertToText(closeResult));
-        }
-    } else {
-        LOGD("stop: Output stream already closed or null");
-    }
-
-    // Stop input stream
-    if (inputStream && inputStream->getState() != oboe::StreamState::Closed) {
-        LOGD("stop: Input stream state before stop: %s", oboe::convertToText(inputStream->getState()));
-        auto stopResult = inputStream->stop();
-        if (stopResult == oboe::Result::OK) {
-            LOGD("stop: Input stream stopped successfully");
-        } else {
-            LOGE("stop: Failed to stop input stream: %s", oboe::convertToText(stopResult));
-        }
-
-        auto closeResult = inputStream->close();
-        if (closeResult == oboe::Result::OK) {
-            LOGD("stop: Input stream closed successfully");
-        } else {
-            LOGE("stop: Failed to close input stream: %s", oboe::convertToText(closeResult));
-        }
-    } else {
-        LOGD("stop: Input stream already closed or null");
-    }
+    stopAndCloseStream(outputStream, "output");
+    stopAndCloseStream(inputStream, "input");
 
     outputStream.reset();
     inputStream.reset();
@@ -525,5 +598,3 @@ Java_net_simno_kortholt_KortholtPlayer_nativeLogPerformanceStatistics(JNIEnv *en
 }
 
 }
-
-

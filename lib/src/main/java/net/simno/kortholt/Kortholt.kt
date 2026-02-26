@@ -68,6 +68,19 @@ object Kortholt {
         fun setListReceiver(receiver: String, callback: (List<Any>) -> Unit)
         fun removeReceiver(receiver: String)
 
+        /**
+         * Start output audio streams. Call after patch is opened to avoid
+         * a race between audio processing and patch loading.
+         */
+        fun startStreams()
+
+        /**
+         * Create and start the input (microphone) stream.
+         * Call when RECORD_AUDIO permission is granted.
+         * Safe to call while output stream is already running.
+         */
+        fun enableMicInput()
+
         // Audio recorder integration
         fun setRecorderCallback(recorderHandle: Long)
         fun clearRecorderCallback()
@@ -133,7 +146,7 @@ object Kortholt {
             companion object {
                 /**
                  * Use system default audio device.
-                 * This value must match oboe::kUnspecified (0) in the native layer.
+                 * Matches oboe::kUnspecified in the native layer.
                  */
                 const val DEVICE_ID_UNSPECIFIED = 0
             }

@@ -54,12 +54,27 @@ public:
     // Performance monitoring functions
     void logPerformanceStatistics();
 
+    /**
+     * Start output and input streams. Call after patch is opened to avoid
+     * race between libpd_process_float and libpd_openfile.
+     */
+    void startStreams();
+
+    /**
+     * Create and start the input (microphone) stream.
+     * Call when RECORD_AUDIO permission is granted.
+     * Safe to call while output stream is already running since it only
+     * writes to a lock-free ring buffer read by PureDataSource.
+     */
+    void enableMicInput();
+
     // Audio recorder integration
     void setRecorderCallback(class AudioRecorderCallback *callback);
     void clearRecorderCallback();
 
 private:
     bool isStream;
+    bool mInputEnabled = false;
     std::mutex streamLock;
     std::shared_ptr<oboe::AudioStream> outputStream;  // For tone generation
     std::shared_ptr<oboe::AudioStream> inputStream;   // For tuner microphone input
@@ -77,9 +92,10 @@ private:
 
     oboe::Result createPlaybackStream();
     oboe::Result createRecordingStream();
+    void stopAndCloseStream(std::shared_ptr<oboe::AudioStream> &stream,
+                            const char *label);
 
     void start();
-
     void stop();
 
     static int32_t calculateTicksPerBuffer();

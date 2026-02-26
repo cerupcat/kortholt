@@ -191,33 +191,30 @@ internal class KortholtPlayer @Inject constructor(
     }
 
     override fun sendBang(receiver: String) {
-        val handle = kortholtHandle.get()
-        if (handle != NOT_SET) {
-            val result = PdBase.sendBang(receiver)
-            android.util.Log.d("KortholtPlayer", "Sent bang to '$receiver': result=$result")
-        } else {
+        if (kortholtHandle.get() == NOT_SET) {
             android.util.Log.w("KortholtPlayer", "Cannot send bang to $receiver: stream not started")
+            return
         }
+        val result = PdBase.sendBang(receiver)
+        android.util.Log.d("KortholtPlayer", "Sent bang to '$receiver': result=$result")
     }
 
     override fun sendFloat(receiver: String, x: Float) {
-        val handle = kortholtHandle.get()
-        if (handle != NOT_SET) {
-            val result = PdBase.sendFloat(receiver, x)
-            android.util.Log.d("KortholtPlayer", "Sent float to '$receiver': $x (result=$result)")
-        } else {
+        if (kortholtHandle.get() == NOT_SET) {
             android.util.Log.w("KortholtPlayer", "Cannot send float to $receiver: stream not started")
+            return
         }
+        val result = PdBase.sendFloat(receiver, x)
+        android.util.Log.d("KortholtPlayer", "Sent float to '$receiver': $x (result=$result)")
     }
 
     override fun sendList(receiver: String, vararg args: Any) {
-        val handle = kortholtHandle.get()
-        if (handle != NOT_SET) {
-            val result = PdBase.sendList(receiver, *args)
-            android.util.Log.d("KortholtPlayer", "Sent list to '$receiver': ${args.toList()} (result=$result)")
-        } else {
+        if (kortholtHandle.get() == NOT_SET) {
             android.util.Log.w("KortholtPlayer", "Cannot send list to $receiver: stream not started")
+            return
         }
+        val result = PdBase.sendList(receiver, *args)
+        android.util.Log.d("KortholtPlayer", "Sent list to '$receiver': ${args.toList()} (result=$result)")
     }
 
     override fun setFloatReceiver(receiver: String, callback: (Float) -> Unit) {
@@ -244,18 +241,13 @@ internal class KortholtPlayer @Inject constructor(
 
     override fun removeReceiver(receiver: String) {
         android.util.Log.d("KortholtPlayer", "Removing receiver for: $receiver")
-        val hadFloatReceiver = floatReceivers.remove(receiver) != null
-        val hadListReceiver = listReceivers.remove(receiver) != null
+        floatReceivers.remove(receiver)
+        listReceivers.remove(receiver)
 
-        // Only unsubscribe if we had receivers and now have none for this symbol
-        if ((hadFloatReceiver || hadListReceiver) &&
-            !floatReceivers.containsKey(receiver) &&
-            !listReceivers.containsKey(receiver)) {
-
-            if (subscribedSymbols.remove(receiver)) {
-                PdBase.unsubscribe(receiver)
-                android.util.Log.d("KortholtPlayer", "Unsubscribed from '$receiver'")
-            }
+        // Unsubscribe from Pure Data if no receivers remain for this symbol
+        if (subscribedSymbols.remove(receiver)) {
+            PdBase.unsubscribe(receiver)
+            android.util.Log.d("KortholtPlayer", "Unsubscribed from '$receiver'")
         }
     }
 
@@ -276,6 +268,26 @@ internal class KortholtPlayer @Inject constructor(
             nativeClearRecorderCallback(handle)
         } else {
             android.util.Log.w("KortholtPlayer", "Cannot clear recorder callback: stream not started")
+        }
+    }
+
+    override fun startStreams() {
+        val handle = kortholtHandle.get()
+        if (handle != NOT_SET) {
+            android.util.Log.d("KortholtPlayer", "Starting streams")
+            nativeStartStreams(handle)
+        } else {
+            android.util.Log.w("KortholtPlayer", "Cannot start streams: kortholt not created")
+        }
+    }
+
+    override fun enableMicInput() {
+        val handle = kortholtHandle.get()
+        if (handle != NOT_SET) {
+            android.util.Log.d("KortholtPlayer", "Enabling mic input")
+            nativeEnableMicInput(handle)
+        } else {
+            android.util.Log.w("KortholtPlayer", "Cannot enable mic input: kortholt not created")
         }
     }
 
@@ -335,6 +347,8 @@ internal class KortholtPlayer @Inject constructor(
     private external fun nativeSetRecorderCallback(kortholtHandle: Long, recorderHandle: Long)
     private external fun nativeClearRecorderCallback(kortholtHandle: Long)
     private external fun nativeSetDeviceIds(kortholtHandle: Long, inputDeviceId: Int, outputDeviceId: Int)
+    private external fun nativeStartStreams(kortholtHandle: Long)
+    private external fun nativeEnableMicInput(kortholtHandle: Long)
     private external fun nativeSaveWaveFile(
         kortholtHandle: Long,
         fileName: String,
