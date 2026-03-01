@@ -1,6 +1,8 @@
 #include <cinttypes>
 #include <memory>
 #include <cmath>
+#include <chrono>
+#include <thread>
 #include <fstream>
 #include <android/log.h>
 #include <jni.h>
@@ -386,6 +388,28 @@ void Kortholt::stopAndCloseStream(std::shared_ptr<oboe::AudioStream> &stream,
         LOGD("stop: %s stream closed successfully", label);
     } else {
         LOGE("stop: Failed to close %s stream: %s", label, oboe::convertToText(closeResult));
+    }
+
+    // Wait for the stream to fully reach Closed state. On the legacy AudioRecord
+    // path (used by some devices like Xiaomi/Poco on Android 13), the system's
+    // AudioRecordThread may still be mid-iteration in processAudioBuffer() after
+    // close() returns. Destroying the stream before that thread exits causes a
+    // SIGSEGV in AudioRecord::isLongTimeZeroData() when it reads the freed buffer.
+    auto state = stream->getState();
+    if (state != oboe::StreamState::Closed) {
+        oboe::StreamState nextState;
+        auto waitResult = stream->waitForStateChange(
+                state, &nextState, 200 * oboe::kNanosPerMillisecond);
+        if (waitResult == oboe::Result::OK) {
+            LOGD("stop: %s stream reached state %s after wait",
+                 label, oboe::convertToText(nextState));
+        } else {
+            LOGE("stop: %s stream wait timed out (state=%s), adding safety delay",
+                 label, oboe::convertToText(state));
+            // Fallback: sleep briefly to let the AudioRecordThread finish its
+            // current iteration before we destroy the stream object.
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        }
     }
 }
 
