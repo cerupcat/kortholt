@@ -3,8 +3,6 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
-#include <sys/system_properties.h>
-#include <unistd.h>
 
 #define LOG_TAG "PureDataSource"
 #ifndef LOGD
@@ -23,9 +21,7 @@ PureDataSource::PureDataSource(int32_t ticksPerBuffer) :
     ticksPerBuffer_(ticksPerBuffer),
     maxFramesPerCallback_(0),
     inputBufferSize_(0),
-    tempBufferSize_(0),
-    useConservativeSettings_(false),
-    adaptiveTicksPerBuffer_(ticksPerBuffer) {
+    tempBufferSize_(0) {
     LOGD("PureDataSource created with ticksPerBuffer=%d", ticksPerBuffer);
 }
 
@@ -44,7 +40,7 @@ bool PureDataSource::validateParameters(int32_t sampleRate, int32_t channelCount
 }
 
 size_t PureDataSource::calculateMaxFramesPerCallback() const {
-    return adaptiveTicksPerBuffer_ * libpd_blocksize();
+    return ticksPerBuffer_ * libpd_blocksize();
 }
 
 bool PureDataSource::initializeBuffers() {
@@ -107,9 +103,6 @@ bool PureDataSource::init(int32_t sampleRate, int32_t channelCount) {
     if (!validateParameters(sampleRate, channelCount)) {
         return false;
     }
-
-    // Apply device-specific tuning before initialization
-    applyDeviceSpecificTuning(sampleRate, channelCount);
 
     // Store output channel count
     outputChannels_.store(channelCount, std::memory_order_release);
@@ -394,133 +387,3 @@ void PureDataSource::resetStatistics() {
     nonFiniteOutputs_.store(0, std::memory_order_relaxed);
 }
 
-void PureDataSource::applyDeviceSpecificTuning(int32_t sampleRate, int32_t channelCount) {
-    LOGD("Applying device-specific tuning for sampleRate=%d, channels=%d", sampleRate, channelCount);
-
-    // Get device information for adaptive tuning
-    char device_brand[PROP_VALUE_MAX];
-    char device_model[PROP_VALUE_MAX];
-    char hardware[PROP_VALUE_MAX];
-    char sdk_version[PROP_VALUE_MAX];
-
-    __system_property_get("ro.product.brand", device_brand);
-    __system_property_get("ro.product.model", device_model);
-    __system_property_get("ro.hardware", hardware);
-    __system_property_get("ro.build.version.sdk", sdk_version);
-
-    // Get number of CPU cores
-    const long num_cores = sysconf(_SC_NPROCESSORS_ONLN);
-    const int sdk_int = atoi(sdk_version);
-
-    LOGD("Device info: brand=%s, model=%s, hardware=%s, SDK=%d, cores=%ld",
-         device_brand, device_model, hardware, sdk_int, num_cores);
-
-    // Start with default settings
-    adaptiveTicksPerBuffer_ = ticksPerBuffer_;
-    useConservativeSettings_ = false;
-
-    // Apply conservative settings for older Android versions
-    if (sdk_int < 23) {  // Android 6.0 (API 23) and below
-        useConservativeSettings_ = true;
-        adaptiveTicksPerBuffer_ = std::max(8, ticksPerBuffer_);
-        LOGD("Applied old Android version optimization: increased buffer safety");
-    }
-
-    // Apply CPU core-based optimizations
-    if (num_cores <= 4) {
-        // Low-end devices: prioritize stability over latency
-        useConservativeSettings_ = true;
-        adaptiveTicksPerBuffer_ = std::max(8, adaptiveTicksPerBuffer_);
-        LOGD("Applied low-core optimization: conservative settings for %ld cores", num_cores);
-    } else if (num_cores >= 8) {
-        // High-end devices: can handle more aggressive settings
-        adaptiveTicksPerBuffer_ = std::min(4, adaptiveTicksPerBuffer_);
-        LOGD("Applied high-core optimization: optimized settings for %ld cores", num_cores);
-    }
-
-    // Sample rate specific adjustments
-    if (sampleRate >= 96000) {
-        // High sample rates need larger buffers for stability
-        adaptiveTicksPerBuffer_ = std::max(8, adaptiveTicksPerBuffer_);
-        LOGD("Applied high sample rate optimization: increased buffer for %d Hz", sampleRate);
-    } else if (sampleRate <= 22050) {
-        // Lower sample rates can use smaller buffers
-        adaptiveTicksPerBuffer_ = std::max(2, std::min(4, adaptiveTicksPerBuffer_));
-        LOGD("Applied low sample rate optimization: optimized buffer for %d Hz", sampleRate);
-    }
-
-    // Channel count adjustments
-    if (channelCount > 2) {
-        // Multi-channel processing needs larger buffers
-        adaptiveTicksPerBuffer_ = std::max(6, adaptiveTicksPerBuffer_);
-        LOGD("Applied multi-channel optimization: increased buffer for %d channels", channelCount);
-    }
-
-    // Device-specific known issues and optimizations
-    if (strstr(device_brand, "samsung") != nullptr) {
-        if (strstr(device_model, "Galaxy A") != nullptr || strstr(device_model, "Galaxy J") != nullptr) {
-            // Samsung budget devices often have audio processing issues
-            useConservativeSettings_ = true;
-            adaptiveTicksPerBuffer_ = std::max(12, adaptiveTicksPerBuffer_);
-            LOGD("Applied Samsung budget device optimization: very conservative settings");
-        } else if (strstr(device_model, "Galaxy S") != nullptr && strstr(device_model, "Galaxy S1") == nullptr) {
-            // Samsung flagship devices (but not S10/S1x which might match S1)
-            adaptiveTicksPerBuffer_ = std::max(4, std::min(8, adaptiveTicksPerBuffer_));
-            LOGD("Applied Samsung flagship optimization: balanced settings");
-        }
-    }
-
-    if (strstr(hardware, "mt") != nullptr || strstr(hardware, "mediatek") != nullptr) {
-        // MediaTek processors often have inconsistent audio performance
-        useConservativeSettings_ = true;
-        adaptiveTicksPerBuffer_ = std::max(10, adaptiveTicksPerBuffer_);
-        LOGD("Applied MediaTek optimization: conservative settings for stability");
-    }
-
-    if (strstr(hardware, "msm") != nullptr || strstr(hardware, "qcom") != nullptr || strstr(hardware, "sdm") != nullptr) {
-        // Qualcomm Snapdragon processors generally have good audio performance
-        if (num_cores >= 8) {
-            adaptiveTicksPerBuffer_ = std::max(2, std::min(6, adaptiveTicksPerBuffer_));
-            LOGD("Applied Qualcomm high-end optimization: aggressive settings");
-        } else {
-            adaptiveTicksPerBuffer_ = std::max(4, std::min(8, adaptiveTicksPerBuffer_));
-            LOGD("Applied Qualcomm mid-range optimization: balanced settings");
-        }
-    }
-
-    if (strstr(device_brand, "huawei") != nullptr || strstr(device_brand, "honor") != nullptr) {
-        // Huawei/Honor devices have varying audio performance
-        useConservativeSettings_ = true;
-        adaptiveTicksPerBuffer_ = std::max(8, adaptiveTicksPerBuffer_);
-        LOGD("Applied Huawei/Honor optimization: conservative settings");
-    }
-
-    if (strstr(device_brand, "xiaomi") != nullptr || strstr(device_brand, "redmi") != nullptr) {
-        // Xiaomi devices generally have good audio performance but vary widely
-        adaptiveTicksPerBuffer_ = std::max(6, std::min(10, adaptiveTicksPerBuffer_));
-        LOGD("Applied Xiaomi optimization: moderate settings");
-    }
-
-    if (strstr(device_brand, "oppo") != nullptr || strstr(device_brand, "oneplus") != nullptr || strstr(device_brand, "vivo") != nullptr) {
-        // BBK Electronics family devices (OnePlus usually performs better)
-        if (strstr(device_brand, "oneplus") != nullptr) {
-            adaptiveTicksPerBuffer_ = std::max(4, std::min(8, adaptiveTicksPerBuffer_));
-            LOGD("Applied OnePlus optimization: balanced settings");
-        } else {
-            adaptiveTicksPerBuffer_ = std::max(8, adaptiveTicksPerBuffer_);
-            LOGD("Applied OPPO/Vivo optimization: conservative settings");
-        }
-    }
-
-    // Ensure ticks per buffer is reasonable
-    adaptiveTicksPerBuffer_ = std::max(1, std::min(32, adaptiveTicksPerBuffer_));
-
-    // Log final settings
-    if (adaptiveTicksPerBuffer_ != ticksPerBuffer_) {
-        LOGD("Device tuning complete: adjusted ticksPerBuffer from %d to %d (conservative=%s)",
-             ticksPerBuffer_, adaptiveTicksPerBuffer_, useConservativeSettings_ ? "yes" : "no");
-    } else {
-        LOGD("Device tuning complete: using default ticksPerBuffer=%d (conservative=%s)",
-             adaptiveTicksPerBuffer_, useConservativeSettings_ ? "yes" : "no");
-    }
-}

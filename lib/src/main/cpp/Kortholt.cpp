@@ -55,6 +55,15 @@ Kortholt::~Kortholt() {
 }
 
 void Kortholt::restart() {
+    // Debounce: if both input and output streams disconnect simultaneously
+    // (e.g. Bluetooth device removed), both error callbacks fire and call
+    // restart(). The atomic flag ensures only the first call proceeds.
+    bool expected = false;
+    if (!mRestarting.compare_exchange_strong(expected, true)) {
+        LOGD("restart: Already restarting, skipping duplicate request");
+        return;
+    }
+
     bool hadInput = mInputEnabled;
     LOGD("restart: hadInput=%s", hadInput ? "true" : "false");
 
@@ -87,6 +96,9 @@ void Kortholt::restart() {
     if (hadInput) {
         enableMicInput();
     }
+
+    mRestarting.store(false, std::memory_order_release);
+    LOGD("restart: Complete");
 }
 
 void Kortholt::setDeviceIds(int32_t inputDeviceId, int32_t outputDeviceId) {
@@ -184,6 +196,7 @@ oboe::Result Kortholt::createPlaybackStream() {
             ->setFormat(oboe::AudioFormat::Float)
             ->setFormatConversionAllowed(true)
             ->setChannelConversionAllowed(true)
+            ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
             ->setFramesPerDataCallback(bufferSize)
             ->setDataCallback(outputCallback.get())
             ->setErrorCallback(errorCallback.get());
@@ -217,6 +230,14 @@ oboe::Result Kortholt::createRecordingStream() {
     LOGD("createRecordingStream: bufferSize=%d, ticksPerBuffer=%d, deviceId=%d",
          bufferSize, ticksPerBuffer, mInputDeviceId);
 
+    // Match the input stream's sample rate to the output stream's rate so that
+    // Pure Data (which was initialized at the output rate) processes mic data at
+    // the correct rate.  If the input hardware doesn't natively support this rate,
+    // Oboe's built-in resampler handles conversion transparently while preserving
+    // the low-latency MMAP path.
+    // See: https://github.com/google/oboe/wiki/FullDuplexStream
+    const int32_t targetSampleRate = outputStream ? outputStream->getSampleRate() : 0;
+
     oboe::AudioStreamBuilder builder;
     builder.setSharingMode(oboe::SharingMode::Exclusive)
             ->setChannelCount(oboe::ChannelCount::Mono)  // Mono input for tuner
@@ -225,9 +246,16 @@ oboe::Result Kortholt::createRecordingStream() {
             ->setFormat(oboe::AudioFormat::Float)
             ->setFormatConversionAllowed(true)
             ->setChannelConversionAllowed(true)
+            ->setSampleRateConversionQuality(oboe::SampleRateConversionQuality::Medium)
             ->setFramesPerDataCallback(bufferSize)
             ->setDataCallback(inputCallback.get())
             ->setErrorCallback(errorCallback.get());
+
+    // Match input sample rate to output so PD processes at a consistent rate
+    if (targetSampleRate > 0) {
+        builder.setSampleRate(targetSampleRate);
+        LOGD("createRecordingStream: Setting input sample rate to match output: %d Hz", targetSampleRate);
+    }
 
     // Set device ID if specified (not kUnspecified)
     if (mInputDeviceId != oboe::kUnspecified) {
@@ -497,6 +525,25 @@ void Kortholt::logPerformanceStatistics() {
              static_cast<unsigned long long>(outputStats.totalCallbacks),
              static_cast<unsigned long long>(outputStats.failedCallbacks),
              outputStats.failurePercentage);
+    }
+
+    // Oboe stream-level metrics
+    std::lock_guard<std::mutex> lock(streamLock);
+    if (outputStream) {
+        auto latencyResult = outputStream->calculateLatencyMillis();
+        auto xRunResult = outputStream->getXRunCount();
+        LOGD("OBOE OUTPUT: latency=%.1f ms, xruns=%d, bufferSize=%d frames, state=%s",
+             latencyResult ? latencyResult.value() : -1.0,
+             xRunResult ? xRunResult.value() : -1,
+             outputStream->getBufferSizeInFrames(),
+             oboe::convertToText(outputStream->getState()));
+    }
+    if (inputStream) {
+        auto xRunResult = inputStream->getXRunCount();
+        LOGD("OBOE INPUT: xruns=%d, bufferSize=%d frames, state=%s",
+             xRunResult ? xRunResult.value() : -1,
+             inputStream->getBufferSizeInFrames(),
+             oboe::convertToText(inputStream->getState()));
     }
 }
 

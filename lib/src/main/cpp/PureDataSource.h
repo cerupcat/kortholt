@@ -40,10 +40,6 @@ private:
     size_t inputBufferSize_;
     size_t tempBufferSize_;
 
-    // Device-specific tuning parameters
-    bool useConservativeSettings_;
-    int32_t adaptiveTicksPerBuffer_;
-
     // Statistics (atomic for thread safety)
     std::atomic<uint64_t> totalCallbacks_{0};
     std::atomic<uint64_t> failedCallbacks_{0};
@@ -143,11 +139,6 @@ private:
      * Process Pure Data ticks safely
      */
     bool processPdTicks(int32_t numFrames, float *outputData);
-
-    /**
-     * Apply device-specific tuning based on hardware capabilities
-     */
-    void applyDeviceSpecificTuning(int32_t sampleRate, int32_t channelCount);
 };
 
 #endif // PUREDATASOURCE_H

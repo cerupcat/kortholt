@@ -37,14 +37,22 @@ public:
     DefaultErrorCallback(IRestartable &parent): mParent(parent) {}
     virtual ~DefaultErrorCallback() = default;
 
+    virtual void onErrorBeforeClose(oboe::AudioStream *oboeStream, oboe::Result error) override {
+        LOGE("%s stream error before close: %s",
+             oboe::convertToText(oboeStream->getDirection()),
+             oboe::convertToText(error));
+    }
+
     virtual void onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) override {
-        // Restart the stream if the error is a disconnect, otherwise do nothing and log the error
-        // reason.
+        LOGE("%s stream error after close: %s",
+             oboe::convertToText(oboeStream->getDirection()),
+             oboe::convertToText(error));
+
         if (error == oboe::Result::ErrorDisconnected) {
-            LOGI("Restarting AudioStream");
+            LOGI("Restarting AudioStream after %s disconnect",
+                 oboe::convertToText(oboeStream->getDirection()));
             mParent.restart();
         }
-        LOGE("Error was %s", oboe::convertToText(error));
     }
 
 private:

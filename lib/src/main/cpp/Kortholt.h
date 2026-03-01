@@ -1,6 +1,7 @@
 #ifndef KORTHOLT_H
 #define KORTHOLT_H
 
+#include <atomic>
 #include <oboe/Oboe.h>
 #include <PdBase.hpp>
 #include <IRestartable.h>
@@ -89,6 +90,9 @@ private:
     // Device selection (oboe::kUnspecified for system default)
     int32_t mInputDeviceId;
     int32_t mOutputDeviceId;
+
+    // Debounce guard: prevents double restart when both streams disconnect simultaneously
+    std::atomic<bool> mRestarting{false};
 
     oboe::Result createPlaybackStream();
     oboe::Result createRecordingStream();
