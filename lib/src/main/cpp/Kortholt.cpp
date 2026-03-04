@@ -61,6 +61,7 @@ Kortholt::~Kortholt() {
     // → stop() → mutex::lock() after the destructor has already destroyed streamLock.
     errorCallback->disable();
     stop();
+    mRetiredStreams.clear();
 }
 
 void Kortholt::restart() {
@@ -72,6 +73,10 @@ void Kortholt::restart() {
         LOGD("restart: Already restarting, skipping duplicate request");
         return;
     }
+
+    // Clean up streams retired during a previous restart — their error
+    // callback threads have long since completed so this is safe.
+    mRetiredStreams.clear();
 
     bool hadInput = mInputEnabled;
     LOGD("restart: hadInput=%s", hadInput ? "true" : "false");
@@ -457,8 +462,11 @@ void Kortholt::stop() {
     stopAndCloseStream(outputStream, "output");
     stopAndCloseStream(inputStream, "input");
 
-    outputStream.reset();
-    inputStream.reset();
+    // Workaround for Oboe bug google/oboe#2325:
+    // Don't destroy streams immediately — retire them to keep FilterAudioStream
+    // alive while Oboe's error callback thread may still reference it.
+    if (outputStream) mRetiredStreams.push_back(std::move(outputStream));
+    if (inputStream) mRetiredStreams.push_back(std::move(inputStream));
     LOGD("stop: Kortholt stopped");
 }
 

@@ -101,6 +101,12 @@ private:
     // Debounce guard: prevents double restart when both streams disconnect simultaneously
     std::atomic<bool> mRestarting{false};
 
+    // Workaround for Oboe bug google/oboe#2325:
+    // FilterAudioStream use-after-free when shared_ptr is released before
+    // Oboe's error callback thread finishes. Old streams are stashed here
+    // to keep FilterAudioStream alive until the next restart/destruction.
+    std::vector<std::shared_ptr<oboe::AudioStream>> mRetiredStreams;
+
     oboe::Result createPlaybackStream();
     oboe::Result createRecordingStream();
     void stopAndCloseStream(std::shared_ptr<oboe::AudioStream> &stream,
