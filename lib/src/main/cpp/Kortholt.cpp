@@ -573,6 +573,14 @@ void Kortholt::clearRecorderCallback() {
     }
 }
 
+int32_t Kortholt::getStreamSampleRate() const {
+    std::lock_guard<std::mutex> lock(streamLock);
+    if (outputStream) {
+        return outputStream->getSampleRate();
+    }
+    return 0;
+}
+
 // JNI bridge functions for Kotlin access
 extern "C" {
 

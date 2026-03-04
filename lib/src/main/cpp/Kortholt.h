@@ -73,10 +73,17 @@ public:
     void setRecorderCallback(class AudioRecorderCallback *callback);
     void clearRecorderCallback();
 
+    /**
+     * Get the sample rate of the output stream.
+     * This is the rate at which PureData and audio recording operate.
+     * Returns 0 if the output stream is not initialized.
+     */
+    int32_t getStreamSampleRate() const;
+
 private:
     bool isStream;
     bool mInputEnabled = false;
-    std::mutex streamLock;
+    mutable std::mutex streamLock;
     std::shared_ptr<oboe::AudioStream> outputStream;  // For tone generation
     std::shared_ptr<oboe::AudioStream> inputStream;   // For tuner microphone input
     std::shared_ptr<PureDataSource> pureDataSource;

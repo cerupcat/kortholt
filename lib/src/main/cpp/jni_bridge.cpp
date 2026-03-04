@@ -183,4 +183,18 @@ Java_net_simno_kortholt_KortholtPlayer_nativeEnableMicInput(
     }
 }
 
+JNIEXPORT jint JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeGetStreamSampleRate(
+    JNIEnv * /*unused*/,
+    jobject /*unused*/,
+    jlong kortholtHandle
+) {
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    if (kortholt != nullptr) {
+        return kortholt->getStreamSampleRate();
+    }
+    LOGE("nativeGetStreamSampleRate: null kortholt");
+    return 0;
+}
+
 } // extern "C"

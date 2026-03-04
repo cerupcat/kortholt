@@ -86,6 +86,14 @@ object Kortholt {
         fun clearRecorderCallback()
 
         /**
+         * Get the sample rate of the active output stream.
+         * This is the rate at which PureData and audio recording operate.
+         * The rate depends on the device (typically 44100 or 48000 Hz).
+         * Returns 0 if the stream is not initialized.
+         */
+        fun getStreamSampleRate(): Int
+
+        /**
          * Set audio device IDs for input and output.
          * This will restart the audio streams with the new devices.
          * Use [Builder.DEVICE_ID_UNSPECIFIED] for system default.

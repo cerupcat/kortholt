@@ -271,6 +271,15 @@ internal class KortholtPlayer @Inject constructor(
         }
     }
 
+    override fun getStreamSampleRate(): Int {
+        val handle = kortholtHandle.get()
+        if (handle != NOT_SET) {
+            return nativeGetStreamSampleRate(handle)
+        }
+        android.util.Log.w("KortholtPlayer", "Cannot get sample rate: stream not started")
+        return 0
+    }
+
     override fun startStreams() {
         val handle = kortholtHandle.get()
         if (handle != NOT_SET) {
@@ -349,6 +358,7 @@ internal class KortholtPlayer @Inject constructor(
     private external fun nativeSetDeviceIds(kortholtHandle: Long, inputDeviceId: Int, outputDeviceId: Int)
     private external fun nativeStartStreams(kortholtHandle: Long)
     private external fun nativeEnableMicInput(kortholtHandle: Long)
+    private external fun nativeGetStreamSampleRate(kortholtHandle: Long): Int
     private external fun nativeSaveWaveFile(
         kortholtHandle: Long,
         fileName: String,
