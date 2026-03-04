@@ -20,6 +20,7 @@
 
 const int32_t DEFAULT_TICKS_FOR_STREAM = 8;
 const int32_t DEFAULT_TICKS = 16;
+const int32_t STREAM_BUFFER_MULTIPLIER = 2;
 
 Kortholt::Kortholt(std::vector<int> cpuIds, bool stream,
                    int32_t inputDeviceId, int32_t outputDeviceId) {
@@ -41,6 +42,8 @@ Kortholt::Kortholt(std::vector<int> cpuIds, bool stream,
     errorCallback = std::make_shared<DefaultErrorCallback>(*this);
     outputCallback = std::make_shared<LatencyTuningCallback>();
     inputCallback = std::make_shared<LatencyTuningCallback>();
+    outputCallback->setBufferTuneEnabled(false);
+    inputCallback->setBufferTuneEnabled(false);
     outputCallback->setCpuIds(cpuIds);
     inputCallback->setCpuIds(std::move(cpuIds));
     outputCallback->setThreadAffinityEnabled(true);
@@ -91,7 +94,7 @@ void Kortholt::restart() {
         if (isStream) {
             outputCallback->reset();
             outputCallback->setSource(pureDataSource);
-            outputStream->setBufferSizeInFrames(bufferSize);
+            outputStream->setBufferSizeInFrames(bufferSize * STREAM_BUFFER_MULTIPLIER);
         }
     }
 
@@ -326,7 +329,7 @@ void Kortholt::start() {
         // between libpd_process_float (audio thread) and libpd_openfile (Java thread).
         outputCallback->reset();
         outputCallback->setSource(pureDataSource);
-        outputStream->setBufferSizeInFrames(bufferSize);
+        outputStream->setBufferSizeInFrames(bufferSize * STREAM_BUFFER_MULTIPLIER);
         LOGD("start: Output stream configured, waiting for startStreams()");
     } else {
         LOGD("start: Configured for file output (not real-time)");
@@ -387,7 +390,7 @@ void Kortholt::enableMicInput() {
     // that PureDataSource reads from — no PD state is modified.
     inputCallback->reset();
     inputCallback->setSource(pureDataInputSource);
-    inputStream->setBufferSizeInFrames(bufferSize);
+    inputStream->setBufferSizeInFrames(bufferSize * STREAM_BUFFER_MULTIPLIER);
 
     auto inputStartResult = inputStream->start();
     if (inputStartResult == oboe::Result::OK) {
