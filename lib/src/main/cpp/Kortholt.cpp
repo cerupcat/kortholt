@@ -51,6 +51,12 @@ Kortholt::Kortholt(std::vector<int> cpuIds, bool stream,
 }
 
 Kortholt::~Kortholt() {
+    // Disable the error callback BEFORE stopping streams. This does two things:
+    // 1. Waits for any in-flight onErrorAfterClose() to finish (mutex synchronization)
+    // 2. Prevents future callbacks from calling restart() on the dying object
+    // Without this, a race exists: Oboe's error callback thread can call restart()
+    // → stop() → mutex::lock() after the destructor has already destroyed streamLock.
+    errorCallback->disable();
     stop();
 }
 

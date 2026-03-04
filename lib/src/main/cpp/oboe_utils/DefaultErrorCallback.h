@@ -17,6 +17,7 @@
 #ifndef SAMPLES_DEFAULT_ERROR_CALLBACK_H
 #define SAMPLES_DEFAULT_ERROR_CALLBACK_H
 
+#include <mutex>
 #include <vector>
 #include <oboe/AudioStreamCallback.h>
 #include <logging_macros.h>
@@ -37,6 +38,19 @@ public:
     DefaultErrorCallback(IRestartable &parent): mParent(parent) {}
     virtual ~DefaultErrorCallback() = default;
 
+    /**
+     * Disable the callback and wait for any in-flight invocation to complete.
+     * After this returns, onErrorAfterClose will never call mParent.restart().
+     *
+     * Must be called before the parent (IRestartable) is destroyed to prevent
+     * a use-after-free race between the Oboe error callback thread and the
+     * destructor thread.
+     */
+    void disable() {
+        std::lock_guard<std::mutex> lock(mMutex);
+        mDisabled = true;
+    }
+
     virtual void onErrorBeforeClose(oboe::AudioStream *oboeStream, oboe::Result error) override {
         LOGE("%s stream error before close: %s",
              oboe::convertToText(oboeStream->getDirection()),
@@ -49,6 +63,12 @@ public:
              oboe::convertToText(error));
 
         if (error == oboe::Result::ErrorDisconnected) {
+            std::lock_guard<std::mutex> lock(mMutex);
+            if (mDisabled) {
+                LOGI("Skipping restart after %s disconnect (callback disabled)",
+                     oboe::convertToText(oboeStream->getDirection()));
+                return;
+            }
             LOGI("Restarting AudioStream after %s disconnect",
                  oboe::convertToText(oboeStream->getDirection()));
             mParent.restart();
@@ -57,6 +77,8 @@ public:
 
 private:
     IRestartable &mParent;
+    std::mutex mMutex;
+    bool mDisabled = false;
 
 };
 
