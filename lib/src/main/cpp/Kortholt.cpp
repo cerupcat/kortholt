@@ -425,6 +425,23 @@ void Kortholt::stopAndCloseStream(std::shared_ptr<oboe::AudioStream> &stream,
         LOGE("stop: Failed to stop %s stream: %s", label, oboe::convertToText(stopResult));
     }
 
+    // Workaround for AudioRecord::isLongTimeZeroData SIGSEGV (Android 13+,
+    // legacy AudioRecord path, Crashlytics issue #3927270e):
+    //
+    // stop() signals AudioRecordThread to exit but does NOT wait for it. The
+    // subsequent close() calls AudioRecord::release() which unmaps the shared
+    // audio buffer (mCblkMemory.clear(), mBufferMemory.clear()). If the thread
+    // is still inside processAudioBuffer() -> isLongTimeZeroData() at that
+    // moment it will SIGSEGV reading the now-unmapped address.
+    //
+    // A brief sleep gives the thread time to complete its current callback
+    // iteration before the buffer memory is freed. At 44100 Hz / 256 frames,
+    // one iteration takes ~6 ms; 50 ms covers ~8 iterations on any device.
+    if (stream->getDirection() == oboe::Direction::Input) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        LOGD("stop: %s post-stop delay to allow AudioRecordThread to exit processAudioBuffer()", label);
+    }
+
     auto closeResult = stream->close();
     if (closeResult == oboe::Result::OK) {
         LOGD("stop: %s stream closed successfully", label);
@@ -432,11 +449,7 @@ void Kortholt::stopAndCloseStream(std::shared_ptr<oboe::AudioStream> &stream,
         LOGE("stop: Failed to close %s stream: %s", label, oboe::convertToText(closeResult));
     }
 
-    // Wait for the stream to fully reach Closed state. On the legacy AudioRecord
-    // path (used by some devices like Xiaomi/Poco on Android 13), the system's
-    // AudioRecordThread may still be mid-iteration in processAudioBuffer() after
-    // close() returns. Destroying the stream before that thread exits causes a
-    // SIGSEGV in AudioRecord::isLongTimeZeroData() when it reads the freed buffer.
+    // Wait for Oboe to complete its internal close sequence.
     auto state = stream->getState();
     if (state != oboe::StreamState::Closed) {
         oboe::StreamState nextState;
@@ -446,11 +459,8 @@ void Kortholt::stopAndCloseStream(std::shared_ptr<oboe::AudioStream> &stream,
             LOGD("stop: %s stream reached state %s after wait",
                  label, oboe::convertToText(nextState));
         } else {
-            LOGE("stop: %s stream wait timed out (state=%s), adding safety delay",
+            LOGE("stop: %s stream wait timed out (state=%s)",
                  label, oboe::convertToText(state));
-            // Fallback: sleep briefly to let the AudioRecordThread finish its
-            // current iteration before we destroy the stream object.
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
         }
     }
 }
