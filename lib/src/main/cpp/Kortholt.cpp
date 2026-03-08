@@ -469,6 +469,14 @@ void Kortholt::stop() {
     std::lock_guard<std::mutex> lock(streamLock);
     LOGD("stop: Stopping Kortholt");
 
+    // Disable DSP and mark PureDataSource as uninitialized BEFORE stopping
+    // streams. This prevents libpd from processing messages (which can
+    // recurse infinitely through corrupted dispatch chains) while the audio
+    // streams are being torn down.
+    if (pureDataSource) {
+        pureDataSource->deinit();
+    }
+
     stopAndCloseStream(outputStream, "output");
     stopAndCloseStream(inputStream, "input");
 

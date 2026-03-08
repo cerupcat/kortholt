@@ -97,6 +97,13 @@ public:
     void addToSearchPath(const char *path);
 
     /**
+     * Disable DSP and mark as uninitialized.
+     * Must be called BEFORE stopping audio streams to prevent libpd from
+     * processing messages into a partially-torn-down DSP graph.
+     */
+    void deinit();
+
+    /**
      * Check if initialized
      */
     bool isInitialized() const {

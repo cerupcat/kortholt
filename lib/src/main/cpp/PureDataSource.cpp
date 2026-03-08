@@ -324,6 +324,26 @@ bool PureDataSource::processAudio(float *inputData, float *outputData, int32_t n
     return true;
 }
 
+void PureDataSource::deinit() {
+    if (!initialized_.load(std::memory_order_acquire)) {
+        LOGD("deinit: Already deinitialized");
+        return;
+    }
+
+    // Mark as uninitialized FIRST so the audio callback outputs silence
+    // instead of calling libpd_process_float() during teardown.
+    initialized_.store(false, std::memory_order_release);
+
+    // Turn off DSP to stop Pure Data's internal scheduler and prevent
+    // message dispatch recursion during patch close / reinit.
+    LOGD("deinit: Disabling DSP");
+    libpd_start_message(1);
+    libpd_add_float(0.0f);
+    libpd_finish_message("pd", "dsp");
+
+    LOGD("deinit: Complete");
+}
+
 void PureDataSource::sendFloat(const char *dest, float value) {
     if (!dest) return;
 
