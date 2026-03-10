@@ -19,6 +19,8 @@
 
 #include <mutex>
 #include <vector>
+#include <chrono>
+#include <thread>
 #include <oboe/AudioStreamCallback.h>
 #include <logging_macros.h>
 
@@ -55,6 +57,17 @@ public:
         LOGE("%s stream error before close: %s",
              oboe::convertToText(oboeStream->getDirection()),
              oboe::convertToText(error));
+
+        // Workaround for AudioRecord::isLongTimeZeroData SIGSEGV (Android 13+):
+        // Oboe calls stop() then close() during error handling. close() unmaps the
+        // shared audio buffer, but AudioRecordThread may still be inside
+        // processAudioBuffer() -> isLongTimeZeroData(). This delay (between Oboe's
+        // internal stop and the close that follows this callback) gives the thread
+        // time to exit. Same rationale as Kortholt::stopAndCloseStream.
+        if (oboeStream->getDirection() == oboe::Direction::Input) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            LOGI("Input stream pre-close delay complete (isLongTimeZeroData workaround)");
+        }
     }
 
     virtual void onErrorAfterClose(oboe::AudioStream *oboeStream, oboe::Result error) override {
