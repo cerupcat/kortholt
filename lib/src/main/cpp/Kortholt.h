@@ -81,16 +81,25 @@ public:
     int32_t getStreamSampleRate() const;
 
 private:
+    // ─── DESTRUCTION ORDER CRITICAL ───────────────────────────────────
+    // C++ destroys members in REVERSE declaration order.
+    // errorCallback and streamLock are declared FIRST so they are
+    // destroyed LAST.  This guarantees that Oboe error callback threads
+    // (which may fire during stream destruction) can still safely access
+    // mMutex inside DefaultErrorCallback and, if they slip past the
+    // atomic-disabled check, streamLock inside Kortholt.
+    // ──────────────────────────────────────────────────────────────────
+    std::shared_ptr<DefaultErrorCallback> errorCallback;
+    mutable std::mutex streamLock;
+
     bool isStream;
     bool mInputEnabled = false;
-    mutable std::mutex streamLock;
     std::shared_ptr<oboe::AudioStream> outputStream;  // For tone generation
     std::shared_ptr<oboe::AudioStream> inputStream;   // For tuner microphone input
     std::shared_ptr<PureDataSource> pureDataSource;
     std::shared_ptr<PureDataInputSource> pureDataInputSource;
     std::shared_ptr<LatencyTuningCallback> outputCallback;
     std::shared_ptr<LatencyTuningCallback> inputCallback;
-    std::shared_ptr<DefaultErrorCallback> errorCallback;
     int32_t ticksPerBuffer;
     int32_t bufferSize;
 

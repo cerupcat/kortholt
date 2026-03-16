@@ -55,13 +55,24 @@ Kortholt::Kortholt(std::vector<int> cpuIds, bool stream,
 
 Kortholt::~Kortholt() {
     // Disable the error callback BEFORE stopping streams. This does two things:
-    // 1. Waits for any in-flight onErrorAfterClose() to finish (mutex synchronization)
-    // 2. Prevents future callbacks from calling restart() on the dying object
-    // Without this, a race exists: Oboe's error callback thread can call restart()
-    // → stop() → mutex::lock() after the destructor has already destroyed streamLock.
+    // 1. Sets an atomic flag so late-arriving Oboe threads bail out lock-free
+    // 2. Acquires mMutex to wait for any in-flight onErrorAfterClose() to finish
+    // 3. Prevents future callbacks from calling restart() on the dying object
     errorCallback->disable();
     stop();
-    mRetiredStreams.clear();
+
+    // Allow time for any Oboe error callback threads spawned during stop()
+    // to reach the atomic-disabled check in onErrorAfterClose() and bail out.
+    // Without this delay, a just-spawned thread could still be in its startup
+    // sequence when member destructors destroy the mutexes below.
+    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+    // Do NOT call mRetiredStreams.clear() here. Let member destruction handle
+    // it naturally. Since mRetiredStreams is declared AFTER errorCallback and
+    // streamLock, it is destroyed FIRST (reverse declaration order). This
+    // ensures errorCallback (and its mMutex) and streamLock remain alive
+    // while retired streams are being destroyed and Oboe threads may still
+    // fire error callbacks.
 }
 
 void Kortholt::restart() {

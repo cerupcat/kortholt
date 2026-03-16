@@ -17,6 +17,7 @@
 #ifndef SAMPLES_DEFAULT_ERROR_CALLBACK_H
 #define SAMPLES_DEFAULT_ERROR_CALLBACK_H
 
+#include <atomic>
 #include <mutex>
 #include <vector>
 #include <chrono>
@@ -47,8 +48,15 @@ public:
      * Must be called before the parent (IRestartable) is destroyed to prevent
      * a use-after-free race between the Oboe error callback thread and the
      * destructor thread.
+     *
+     * Sets an atomic flag FIRST (lock-free barrier for late-arriving threads)
+     * and then acquires the mutex to synchronize with any in-flight callback.
      */
     void disable() {
+        // Set atomic flag first — late-arriving Oboe threads will see this
+        // even if they arrive after ~Kortholt() has destroyed mMutex.
+        mAtomicDisabled.store(true, std::memory_order_release);
+
         std::lock_guard<std::mutex> lock(mMutex);
         mDisabled = true;
     }
@@ -75,6 +83,17 @@ public:
              oboe::convertToText(oboeStream->getDirection()),
              oboe::convertToText(error));
 
+        // Lock-free early exit: check the atomic flag BEFORE acquiring mMutex.
+        // This prevents a crash when an Oboe error callback thread arrives after
+        // ~Kortholt() has destroyed mMutex during member destruction.
+        // The atomic flag is set in disable() before stop() begins, so any
+        // callback thread spawned during stream teardown will see it.
+        if (mAtomicDisabled.load(std::memory_order_acquire)) {
+            LOGI("Skipping callback for %s (disabled, lock-free check)",
+                 oboe::convertToText(oboeStream->getDirection()));
+            return;
+        }
+
         if (error == oboe::Result::ErrorDisconnected) {
             std::lock_guard<std::mutex> lock(mMutex);
             if (mDisabled) {
@@ -92,6 +111,7 @@ private:
     IRestartable &mParent;
     std::mutex mMutex;
     bool mDisabled = false;
+    std::atomic<bool> mAtomicDisabled{false};
 
 };
 
