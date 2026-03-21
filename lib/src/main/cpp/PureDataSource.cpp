@@ -160,6 +160,7 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         return;
     }
 
+#ifndef NDEBUG
     // --- Callback gap tracking (detect late callbacks / scheduling jitter) ---
     struct timespec now;
     clock_gettime(CLOCK_MONOTONIC, &now);
@@ -171,6 +172,7 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         }
     }
     lastCallbackNs_ = nowNs;
+#endif
 
     totalCallbacks_.fetch_add(1, std::memory_order_relaxed);
 
@@ -195,19 +197,19 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         }
     }
 
-    // --- Time the PD processing ---
-    struct timespec beforePd;
-    clock_gettime(CLOCK_MONOTONIC, &beforePd);
-
     // Attempt processing with error recovery
     bool processingSucceeded = false;
+#ifndef NDEBUG
+    struct timespec beforePd;
+    clock_gettime(CLOCK_MONOTONIC, &beforePd);
+#endif
     try {
         processingSucceeded = processPdTicks(numFrames, audioData);
     } catch (...) {
         // Catch any exceptions to prevent audio thread crashes
         processingSucceeded = false;
     }
-
+#ifndef NDEBUG
     struct timespec afterPd;
     clock_gettime(CLOCK_MONOTONIC, &afterPd);
     const uint64_t processingNs =
@@ -216,6 +218,7 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
     if (processingNs > maxProcessingNsSinceLastDiag_) {
         maxProcessingNsSinceLastDiag_ = processingNs;
     }
+#endif
 
     if (!processingSucceeded) {
         failedCallbacks_.fetch_add(1, std::memory_order_relaxed);
@@ -224,6 +227,7 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         std::memset(audioData, 0, numFrames * outputChans * sizeof(float));
     }
 
+#ifndef NDEBUG
     // --- Per-callback peak amplitude, clipping & discontinuity tracking ---
     if (processingSucceeded) {
         const int32_t outputChans = outputChannels_.load(std::memory_order_acquire);
@@ -314,6 +318,7 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         maxGapSinceLastDiag_ = 0;
         maxProcessingNsSinceLastDiag_ = 0;
     }
+#endif  // NDEBUG
 }
 
 bool PureDataSource::processPdTicks(int32_t numFrames, float *outputData) {
