@@ -312,6 +312,31 @@ internal class KortholtPlayer @Inject constructor(
         }
     }
 
+    override fun isInputDigitalSilence(): Boolean {
+        val handle = kortholtHandle.get()
+        if (handle != NOT_SET) {
+            return nativeIsInputDigitalSilence(handle)
+        }
+        return false
+    }
+
+    override fun reopenInputStream(preset: Int, audioApi: Int) {
+        val handle = kortholtHandle.get()
+        if (handle != NOT_SET) {
+            android.util.Log.d("KortholtPlayer", "Reopening input stream: preset=$preset, audioApi=$audioApi")
+            nativeReopenInputStream(handle, preset, audioApi)
+        } else {
+            android.util.Log.w("KortholtPlayer", "Cannot reopen input stream: kortholt not created")
+        }
+    }
+
+    override fun resetInputSilenceDetection() {
+        val handle = kortholtHandle.get()
+        if (handle != NOT_SET) {
+            nativeResetInputSilenceDetection(handle)
+        }
+    }
+
     @ExperimentalWaveFile
     override suspend fun saveWaveFile(
         outputFile: File,
@@ -359,6 +384,9 @@ internal class KortholtPlayer @Inject constructor(
     private external fun nativeStartStreams(kortholtHandle: Long)
     private external fun nativeEnableMicInput(kortholtHandle: Long)
     private external fun nativeGetStreamSampleRate(kortholtHandle: Long): Int
+    private external fun nativeIsInputDigitalSilence(kortholtHandle: Long): Boolean
+    private external fun nativeReopenInputStream(kortholtHandle: Long, preset: Int, audioApi: Int)
+    private external fun nativeResetInputSilenceDetection(kortholtHandle: Long)
     private external fun nativeSaveWaveFile(
         kortholtHandle: Long,
         fileName: String,
