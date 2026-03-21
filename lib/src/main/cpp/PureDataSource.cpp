@@ -3,6 +3,7 @@
 #include <cstring>
 #include <algorithm>
 #include <cmath>
+#include <time.h>
 
 #define LOG_TAG "PureDataSource"
 #ifndef LOGD
@@ -159,6 +160,18 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         return;
     }
 
+    // --- Callback gap tracking (detect late callbacks / scheduling jitter) ---
+    struct timespec now;
+    clock_gettime(CLOCK_MONOTONIC, &now);
+    const uint64_t nowNs = static_cast<uint64_t>(now.tv_sec) * 1000000000ULL + now.tv_nsec;
+    if (lastCallbackNs_ > 0) {
+        const uint64_t gapNs = nowNs - lastCallbackNs_;
+        if (gapNs > maxGapSinceLastDiag_) {
+            maxGapSinceLastDiag_ = gapNs;
+        }
+    }
+    lastCallbackNs_ = nowNs;
+
     totalCallbacks_.fetch_add(1, std::memory_order_relaxed);
 
     // Robust frame count validation with graceful degradation
@@ -182,6 +195,10 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         }
     }
 
+    // --- Time the PD processing ---
+    struct timespec beforePd;
+    clock_gettime(CLOCK_MONOTONIC, &beforePd);
+
     // Attempt processing with error recovery
     bool processingSucceeded = false;
     try {
@@ -191,22 +208,62 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         processingSucceeded = false;
     }
 
+    struct timespec afterPd;
+    clock_gettime(CLOCK_MONOTONIC, &afterPd);
+    const uint64_t processingNs =
+        (static_cast<uint64_t>(afterPd.tv_sec) * 1000000000ULL + afterPd.tv_nsec) -
+        (static_cast<uint64_t>(beforePd.tv_sec) * 1000000000ULL + beforePd.tv_nsec);
+    if (processingNs > maxProcessingNsSinceLastDiag_) {
+        maxProcessingNsSinceLastDiag_ = processingNs;
+    }
+
     if (!processingSucceeded) {
         failedCallbacks_.fetch_add(1, std::memory_order_relaxed);
         // Always output silence on failure rather than leaving uninitialized data
         const int32_t outputChans = outputChannels_.load(std::memory_order_acquire);
         std::memset(audioData, 0, numFrames * outputChans * sizeof(float));
+    }
 
-        // Log periodic warnings to avoid log spam
-        const uint64_t totalCalls = totalCallbacks_.load(std::memory_order_relaxed);
-        if (totalCalls % 1000 == 0) {  // Log every 1000 calls
-            const uint64_t failures = failedCallbacks_.load(std::memory_order_relaxed);
-            const uint64_t nonFinite = nonFiniteOutputs_.load(std::memory_order_relaxed);
-            LOGW("Audio stats: %llu failures, %llu non-finite out of %llu calls",
-                 static_cast<unsigned long long>(failures),
-                 static_cast<unsigned long long>(nonFinite),
-                 static_cast<unsigned long long>(totalCalls));
+    // --- Per-callback peak amplitude & clipping tracking ---
+    if (processingSucceeded) {
+        const int32_t outputChans = outputChannels_.load(std::memory_order_acquire);
+        const size_t totalSamples = numFrames * outputChans;
+        for (size_t i = 0; i < totalSamples; ++i) {
+            const float absVal = std::fabs(audioData[i]);
+            if (absVal > peakSinceLastDiag_) {
+                peakSinceLastDiag_ = absVal;
+            }
+            if (absVal >= 0.999f) {
+                clippingSinceLastDiag_++;
+            }
         }
+    }
+
+    // --- Periodic DIAG report (every 5000 callbacks ≈ 27 sec) ---
+    const uint64_t callCount = totalCallbacks_.load(std::memory_order_relaxed);
+    if (callCount % 5000 == 1) {
+        const int32_t outputChans = outputChannels_.load(std::memory_order_acquire);
+        const int32_t inputChans = inputChannels_.load(std::memory_order_acquire);
+        const uint64_t failures = failedCallbacks_.load(std::memory_order_relaxed);
+
+        LOGD("DIAG: callback #%llu, frames=%d, ticks=%d, inputChans=%d, outputChans=%d, "
+             "pdInput=%s, peak=%.6f, clips=%llu, maxGap=%.2fms, maxPdTime=%.2fms, fails=%llu",
+             static_cast<unsigned long long>(callCount),
+             numFrames,
+             numFrames / blockSize,
+             inputChans, outputChans,
+             (inputChannels_.load(std::memory_order_relaxed) > 0 && inputSource_) ? "valid" : "NULL",
+             peakSinceLastDiag_,
+             static_cast<unsigned long long>(clippingSinceLastDiag_),
+             maxGapSinceLastDiag_ / 1000000.0,
+             maxProcessingNsSinceLastDiag_ / 1000000.0,
+             static_cast<unsigned long long>(failures));
+
+        // Reset per-period trackers
+        peakSinceLastDiag_ = 0.0f;
+        clippingSinceLastDiag_ = 0;
+        maxGapSinceLastDiag_ = 0;
+        maxProcessingNsSinceLastDiag_ = 0;
     }
 }
 
@@ -267,22 +324,6 @@ bool PureDataSource::processPdTicks(int32_t numFrames, float *outputData) {
         std::memset(outputData, 0, numFrames * outputChans * sizeof(float));
 
         libpd_process_float(ticks, pdInputBuffer, outputData);
-
-        // Periodically check if PD is producing non-zero output
-        const uint64_t callCount = totalCallbacks_.load(std::memory_order_relaxed);
-        if (callCount % 5000 == 1) {
-            float maxAbs = 0.0f;
-            const size_t totalSamples = numFrames * outputChans;
-            for (size_t i = 0; i < totalSamples; ++i) {
-                float absVal = std::fabs(outputData[i]);
-                if (absVal > maxAbs) maxAbs = absVal;
-            }
-            LOGD("DIAG: callback #%llu, frames=%d, ticks=%d, inputChans=%d, outputChans=%d, "
-                 "pdInput=%s, maxAbsSample=%.6f",
-                 static_cast<unsigned long long>(callCount), numFrames, ticks,
-                 inputChans, outputChans,
-                 pdInputBuffer ? "valid" : "NULL", maxAbs);
-        }
 
         // Post-process validation: check for NaN/infinity in output
         bool outputValid = true;

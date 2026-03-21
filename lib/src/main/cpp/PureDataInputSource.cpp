@@ -127,7 +127,7 @@ void PureDataInputSource::renderAudio(float *audioData, int32_t numFrames) {
         for (int32_t ch = 0; ch < channels; ++ch) {
             const float sample = audioData[frame * channels + ch];
 
-            if (sample != 0.0f) {
+            if (allZero && sample != 0.0f) {
                 allZero = false;
             }
 

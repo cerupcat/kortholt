@@ -117,12 +117,10 @@ void Kortholt::restart() {
     // Start the output stream
     startStreams();
 
-    // Re-enable mic input if it was active before
+    // Re-enable mic input if it was active before.
+    // enableMicInput() resets mInputPreset/mInputAudioApi to defaults internally,
+    // so the fallback chain starts fresh for the new device.
     if (hadInput) {
-        // Reset input config — new device may have different quirks,
-        // so the fallback chain should start fresh
-        mInputPreset = oboe::InputPreset::VoiceRecognition;
-        mInputAudioApi = oboe::AudioApi::Unspecified;
         enableMicInput();
     }
 
@@ -387,6 +385,44 @@ void Kortholt::startStreams() {
     }
 }
 
+bool Kortholt::openAndStartInputStream(const char *label) {
+    // Close existing input stream if any
+    stopAndCloseStream(inputStream, "input");
+    inputStream.reset();
+
+    // Create the recording stream with current mInputPreset/mInputAudioApi
+    auto inputResult = createRecordingStream();
+    if (inputResult != oboe::Result::OK) {
+        LOGE("%s: Failed to create input stream: %s",
+             label, oboe::convertToText(inputResult));
+        return false;
+    }
+
+    // Configure the input stream.
+    // Safe while output stream is running because PureDataInputSource only
+    // writes to a lock-free ring buffer that PureDataSource reads from.
+    inputCallback->reset();
+    inputCallback->setSource(pureDataInputSource);
+    inputStream->setBufferSizeInFrames(bufferSize * STREAM_BUFFER_MULTIPLIER);
+
+    // Reset silence detection for the new stream
+    if (pureDataInputSource) {
+        pureDataInputSource->resetSilenceCounters();
+    }
+
+    auto inputStartResult = inputStream->start();
+    if (inputStartResult == oboe::Result::OK) {
+        LOGD("%s: Input stream started successfully", label);
+        LOGD("  Input Preset: %s", oboe::convertToText(inputStream->getInputPreset()));
+        LOGD("  Audio API: %s", oboe::convertToText(inputStream->getAudioApi()));
+        return true;
+    } else {
+        LOGE("%s: Failed to start input stream: %s",
+             label, oboe::convertToText(inputStartResult));
+        return false;
+    }
+}
+
 void Kortholt::enableMicInput() {
     std::lock_guard<std::mutex> lock(streamLock);
     LOGD("enableMicInput: Creating and starting input stream");
@@ -407,39 +443,8 @@ void Kortholt::enableMicInput() {
     mInputPreset = oboe::InputPreset::VoiceRecognition;
     mInputAudioApi = oboe::AudioApi::Unspecified;
 
-    // Close existing input stream if any
-    stopAndCloseStream(inputStream, "input");
-    inputStream.reset();
-
-    // Create the recording stream (requires RECORD_AUDIO permission)
-    auto inputResult = createRecordingStream();
-    if (inputResult != oboe::Result::OK) {
-        LOGE("enableMicInput: Failed to create input stream: %s",
-             oboe::convertToText(inputResult));
-        return;
-    }
-
-    // Configure and start the input stream.
-    // This is safe while the output stream is running because
-    // PureDataInputSource only writes to a lock-free ring buffer
-    // that PureDataSource reads from — no PD state is modified.
-    inputCallback->reset();
-    inputCallback->setSource(pureDataInputSource);
-    inputStream->setBufferSizeInFrames(bufferSize * STREAM_BUFFER_MULTIPLIER);
-
-    // Reset silence detection for the new stream
-    if (pureDataInputSource) {
-        pureDataInputSource->resetSilenceCounters();
-    }
-
-    auto inputStartResult = inputStream->start();
-    if (inputStartResult == oboe::Result::OK) {
+    if (openAndStartInputStream("enableMicInput")) {
         mInputEnabled = true;
-        LOGD("enableMicInput: Input stream started successfully");
-        LOGD("  Input State: %s", oboe::convertToText(inputStream->getState()));
-    } else {
-        LOGE("enableMicInput: Failed to start input stream: %s",
-             oboe::convertToText(inputStartResult));
     }
 }
 
@@ -664,41 +669,10 @@ void Kortholt::reopenInputStream(oboe::InputPreset preset, oboe::AudioApi audioA
     LOGD("reopenInputStream: Reopening with preset=%d, audioApi=%d",
          static_cast<int>(preset), static_cast<int>(audioApi));
 
-    // Store new configuration
     mInputPreset = preset;
     mInputAudioApi = audioApi;
 
-    // Close existing input stream
-    stopAndCloseStream(inputStream, "input");
-    inputStream.reset();
-
-    // Create new recording stream with updated configuration
-    auto inputResult = createRecordingStream();
-    if (inputResult != oboe::Result::OK) {
-        LOGE("reopenInputStream: Failed to create input stream: %s",
-             oboe::convertToText(inputResult));
-        return;
-    }
-
-    // Configure and start
-    inputCallback->reset();
-    inputCallback->setSource(pureDataInputSource);
-    inputStream->setBufferSizeInFrames(bufferSize * STREAM_BUFFER_MULTIPLIER);
-
-    // Reset silence detection for the new stream
-    if (pureDataInputSource) {
-        pureDataInputSource->resetSilenceCounters();
-    }
-
-    auto inputStartResult = inputStream->start();
-    if (inputStartResult == oboe::Result::OK) {
-        LOGD("reopenInputStream: Input stream started successfully");
-        LOGD("  Input Preset: %s", oboe::convertToText(inputStream->getInputPreset()));
-        LOGD("  Audio API: %s", oboe::convertToText(inputStream->getAudioApi()));
-    } else {
-        LOGE("reopenInputStream: Failed to start input stream: %s",
-             oboe::convertToText(inputStartResult));
-    }
+    openAndStartInputStream("reopenInputStream");
 }
 
 void Kortholt::resetInputSilenceDetection() {

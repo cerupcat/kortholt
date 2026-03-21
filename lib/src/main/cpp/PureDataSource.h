@@ -45,6 +45,13 @@ private:
     std::atomic<uint64_t> failedCallbacks_{0};
     std::atomic<uint64_t> nonFiniteOutputs_{0};
 
+    // Audio callback thread diagnostics (only accessed from audio thread — no atomics needed)
+    float peakSinceLastDiag_ = 0.0f;
+    uint64_t clippingSinceLastDiag_ = 0;
+    uint64_t lastCallbackNs_ = 0;
+    uint64_t maxGapSinceLastDiag_ = 0;
+    uint64_t maxProcessingNsSinceLastDiag_ = 0;
+
 public:
     explicit PureDataSource(int32_t ticksPerBuffer);
     virtual ~PureDataSource() = default;

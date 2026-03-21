@@ -145,6 +145,7 @@ private:
 
     oboe::Result createPlaybackStream();
     oboe::Result createRecordingStream();
+    bool openAndStartInputStream(const char *label);
     void stopAndCloseStream(std::shared_ptr<oboe::AudioStream> &stream,
                             const char *label);
 
