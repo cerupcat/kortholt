@@ -48,6 +48,12 @@ private:
     std::atomic<uint64_t> totalFramesReceived_{0};
     std::atomic<uint64_t> droppedFrames_{0};
 
+    // Silence detection for InputPreset fallback (atomic for thread safety)
+    // Tracks consecutive all-zero callbacks to detect digital silence from buggy
+    // AAudio InputPreset handling on Samsung/MediaTek devices.
+    std::atomic<uint64_t> consecutiveZeroCallbacks_{0};
+    std::atomic<uint64_t> totalInputCallbacks_{0};
+
     // Optional recorder callback (atomic pointer for thread-safe updates)
     std::atomic<AudioRecorderCallback*> recorderCallback_{nullptr};
 
@@ -112,6 +118,25 @@ public:
      * Reset statistics counters
      */
     void resetStatistics();
+
+    /**
+     * Check if the input stream is producing digital silence.
+     * Digital silence = all-zero samples from the hardware, indicating
+     * the device's AAudio implementation is not delivering audio data.
+     *
+     * @param graceCallbacks Number of callbacks to skip after stream start
+     *                       (allows hardware warmup)
+     * @param silenceCallbacks Number of consecutive all-zero callbacks
+     *                         required to confirm digital silence
+     * @return true if past grace period AND enough consecutive zero callbacks
+     */
+    bool isDigitalSilence(uint64_t graceCallbacks, uint64_t silenceCallbacks) const;
+
+    /**
+     * Reset silence detection counters.
+     * Call when reopening the input stream with a new configuration.
+     */
+    void resetSilenceCounters();
 
     /**
      * Clear all audio buffers
