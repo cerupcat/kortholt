@@ -197,4 +197,53 @@ Java_net_simno_kortholt_KortholtPlayer_nativeGetStreamSampleRate(
     return 0;
 }
 
+JNIEXPORT jboolean JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeIsInputDigitalSilence(
+    JNIEnv * /*unused*/,
+    jobject /*unused*/,
+    jlong kortholtHandle
+) {
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    if (kortholt != nullptr) {
+        return kortholt->isInputDigitalSilence();
+    }
+    LOGE("nativeIsInputDigitalSilence: null kortholt");
+    return false;
+}
+
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeReopenInputStream(
+    JNIEnv * /*unused*/,
+    jobject /*unused*/,
+    jlong kortholtHandle,
+    jint preset,
+    jint audioApi
+) {
+    LOGD("nativeReopenInputStream: handle=%lld, preset=%d, audioApi=%d",
+         (long long)kortholtHandle, preset, audioApi);
+
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    if (kortholt != nullptr) {
+        kortholt->reopenInputStream(
+            static_cast<oboe::InputPreset>(preset),
+            static_cast<oboe::AudioApi>(audioApi));
+    } else {
+        LOGE("nativeReopenInputStream: null kortholt");
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeResetInputSilenceDetection(
+    JNIEnv * /*unused*/,
+    jobject /*unused*/,
+    jlong kortholtHandle
+) {
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    if (kortholt != nullptr) {
+        kortholt->resetInputSilenceDetection();
+    } else {
+        LOGE("nativeResetInputSilenceDetection: null kortholt");
+    }
+}
+
 } // extern "C"
