@@ -74,6 +74,28 @@ public:
     void clearRecorderCallback();
 
     /**
+     * Check if the input stream is producing digital silence.
+     * Delegates to PureDataInputSource with the configured thresholds.
+     */
+    bool isInputDigitalSilence();
+
+    /**
+     * Close and reopen the input stream with a different InputPreset and/or AudioApi.
+     * The output stream, PD patch, and all state remain untouched.
+     * Resets silence detection counters after reopening.
+     *
+     * @param preset The InputPreset to use (e.g., Generic, VoiceCommunication)
+     * @param audioApi The AudioApi to use (Unspecified lets Oboe choose, OpenSLES forces legacy)
+     */
+    void reopenInputStream(oboe::InputPreset preset,
+                           oboe::AudioApi audioApi = oboe::AudioApi::Unspecified);
+
+    /**
+     * Reset silence detection counters without reopening the stream.
+     */
+    void resetInputSilenceDetection();
+
+    /**
      * Get the sample rate of the output stream.
      * This is the rate at which PureData and audio recording operate.
      * Returns 0 if the output stream is not initialized.
@@ -107,6 +129,11 @@ private:
     int32_t mInputDeviceId;
     int32_t mOutputDeviceId;
 
+    // Input stream configuration for silence fallback
+    // Reset to defaults on enableMicInput() and restart() (new device = fresh chain)
+    oboe::InputPreset mInputPreset = oboe::InputPreset::VoiceRecognition;
+    oboe::AudioApi mInputAudioApi = oboe::AudioApi::Unspecified;
+
     // Debounce guard: prevents double restart when both streams disconnect simultaneously
     std::atomic<bool> mRestarting{false};
 
@@ -125,6 +152,10 @@ private:
     void stop();
 
     static int32_t calculateTicksPerBuffer();
+
+    // Silence detection constants (configurable for tuning)
+    static constexpr uint64_t SILENCE_GRACE_CALLBACKS = 62;     // ~500ms at 48kHz/384-frame buffers
+    static constexpr uint64_t SILENCE_DETECTION_CALLBACKS = 62;  // ~500ms of consecutive zeros
 };
 
 #endif //KORTHOLT_H
