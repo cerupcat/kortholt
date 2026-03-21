@@ -109,6 +109,7 @@ void PureDataInputSource::renderAudio(float *audioData, int32_t numFrames) {
 
     // Update statistics
     totalFramesReceived_.fetch_add(numFrames, std::memory_order_relaxed);
+    totalInputCallbacks_.fetch_add(1, std::memory_order_relaxed);
 
     // Validate frame count to prevent buffer overruns
     const int32_t maxAllowedFrames = static_cast<int32_t>(tempBufferSize_ / channels);
@@ -120,10 +121,15 @@ void PureDataInputSource::renderAudio(float *audioData, int32_t numFrames) {
 
     // Write interleaved audio data to per-channel ring buffers
     size_t totalDropped = 0;
+    bool allZero = true;
 
     for (int32_t frame = 0; frame < framesToProcess; ++frame) {
         for (int32_t ch = 0; ch < channels; ++ch) {
             const float sample = audioData[frame * channels + ch];
+
+            if (sample != 0.0f) {
+                allZero = false;
+            }
 
             // Try to write sample to ring buffer
             const size_t written = ringBuffers_[ch]->write(&sample, 1);
@@ -135,6 +141,13 @@ void PureDataInputSource::renderAudio(float *audioData, int32_t numFrames) {
 
     if (totalDropped > 0) {
         droppedFrames_.fetch_add(totalDropped / channels, std::memory_order_relaxed);
+    }
+
+    // Update silence detection counters
+    if (allZero) {
+        consecutiveZeroCallbacks_.fetch_add(1, std::memory_order_relaxed);
+    } else {
+        consecutiveZeroCallbacks_.store(0, std::memory_order_relaxed);
     }
 }
 
@@ -223,6 +236,7 @@ PureDataInputSource::Statistics PureDataInputSource::getStatistics() const {
 void PureDataInputSource::resetStatistics() {
     totalFramesReceived_.store(0, std::memory_order_relaxed);
     droppedFrames_.store(0, std::memory_order_relaxed);
+    resetSilenceCounters();
 }
 
 void PureDataInputSource::clearBuffers() {
@@ -314,4 +328,15 @@ size_t PureDataInputSource::calculateOptimalBufferSize(int32_t sampleRate, int32
 
     LOGD("Calculated optimal buffer size: %zu", bufferSize);
     return bufferSize;
+}
+
+bool PureDataInputSource::isDigitalSilence(uint64_t graceCallbacks, uint64_t silenceCallbacks) const {
+    const uint64_t total = totalInputCallbacks_.load(std::memory_order_acquire);
+    const uint64_t consecutive = consecutiveZeroCallbacks_.load(std::memory_order_acquire);
+    return total > graceCallbacks && consecutive >= silenceCallbacks;
+}
+
+void PureDataInputSource::resetSilenceCounters() {
+    consecutiveZeroCallbacks_.store(0, std::memory_order_relaxed);
+    totalInputCallbacks_.store(0, std::memory_order_relaxed);
 }
