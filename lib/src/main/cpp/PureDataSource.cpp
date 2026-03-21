@@ -224,17 +224,61 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         std::memset(audioData, 0, numFrames * outputChans * sizeof(float));
     }
 
-    // --- Per-callback peak amplitude & clipping tracking ---
+    // --- Per-callback peak amplitude, clipping & discontinuity tracking ---
     if (processingSucceeded) {
         const int32_t outputChans = outputChannels_.load(std::memory_order_acquire);
         const size_t totalSamples = numFrames * outputChans;
+
+        // Discontinuity threshold: a 2217 Hz sine at 48kHz has max delta ~0.25.
+        // Anything above 0.5 is suspicious; above 0.8 is definitely a click.
+        constexpr float DISCONTINUITY_THRESHOLD = 0.5f;
+
         for (size_t i = 0; i < totalSamples; ++i) {
-            const float absVal = std::fabs(audioData[i]);
+            const float sample = audioData[i];
+            const float absVal = std::fabs(sample);
+
+            // Peak tracking
             if (absVal > peakSinceLastDiag_) {
                 peakSinceLastDiag_ = absVal;
             }
             if (absVal >= 0.999f) {
                 clippingSinceLastDiag_++;
+            }
+
+            // Sample-to-sample discontinuity detection (per channel)
+            // For stereo interleaved: even indices = L, odd = R
+            if (outputChans == 2) {
+                if (i % 2 == 0) {
+                    // Left channel
+                    const float delta = std::fabs(sample - lastSampleL_);
+                    if (delta > maxDeltaSinceLastDiag_) {
+                        maxDeltaSinceLastDiag_ = delta;
+                    }
+                    if (delta > DISCONTINUITY_THRESHOLD) {
+                        discontinuitiesSinceLastDiag_++;
+                    }
+                    lastSampleL_ = sample;
+                } else {
+                    // Right channel
+                    const float delta = std::fabs(sample - lastSampleR_);
+                    if (delta > maxDeltaSinceLastDiag_) {
+                        maxDeltaSinceLastDiag_ = delta;
+                    }
+                    if (delta > DISCONTINUITY_THRESHOLD) {
+                        discontinuitiesSinceLastDiag_++;
+                    }
+                    lastSampleR_ = sample;
+                }
+            } else {
+                // Mono fallback
+                const float delta = std::fabs(sample - lastSampleL_);
+                if (delta > maxDeltaSinceLastDiag_) {
+                    maxDeltaSinceLastDiag_ = delta;
+                }
+                if (delta > DISCONTINUITY_THRESHOLD) {
+                    discontinuitiesSinceLastDiag_++;
+                }
+                lastSampleL_ = sample;
             }
         }
     }
@@ -247,7 +291,8 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         const uint64_t failures = failedCallbacks_.load(std::memory_order_relaxed);
 
         LOGD("DIAG: callback #%llu, frames=%d, ticks=%d, inputChans=%d, outputChans=%d, "
-             "pdInput=%s, peak=%.6f, clips=%llu, maxGap=%.2fms, maxPdTime=%.2fms, fails=%llu",
+             "pdInput=%s, peak=%.6f, clips=%llu, maxDelta=%.6f, discont=%llu, "
+             "maxGap=%.2fms, maxPdTime=%.2fms, fails=%llu",
              static_cast<unsigned long long>(callCount),
              numFrames,
              numFrames / blockSize,
@@ -255,6 +300,8 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
              (inputChannels_.load(std::memory_order_relaxed) > 0 && inputSource_) ? "valid" : "NULL",
              peakSinceLastDiag_,
              static_cast<unsigned long long>(clippingSinceLastDiag_),
+             maxDeltaSinceLastDiag_,
+             static_cast<unsigned long long>(discontinuitiesSinceLastDiag_),
              maxGapSinceLastDiag_ / 1000000.0,
              maxProcessingNsSinceLastDiag_ / 1000000.0,
              static_cast<unsigned long long>(failures));
@@ -262,6 +309,8 @@ void PureDataSource::renderAudio(float *audioData, int32_t numFrames) {
         // Reset per-period trackers
         peakSinceLastDiag_ = 0.0f;
         clippingSinceLastDiag_ = 0;
+        maxDeltaSinceLastDiag_ = 0.0f;
+        discontinuitiesSinceLastDiag_ = 0;
         maxGapSinceLastDiag_ = 0;
         maxProcessingNsSinceLastDiag_ = 0;
     }

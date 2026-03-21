@@ -52,6 +52,12 @@ private:
     uint64_t maxGapSinceLastDiag_ = 0;
     uint64_t maxProcessingNsSinceLastDiag_ = 0;
 
+    // Discontinuity detection — tracks max sample-to-sample delta per channel
+    float maxDeltaSinceLastDiag_ = 0.0f;
+    float lastSampleL_ = 0.0f;  // last sample of previous callback (left channel)
+    float lastSampleR_ = 0.0f;  // last sample of previous callback (right channel)
+    uint64_t discontinuitiesSinceLastDiag_ = 0;  // count of deltas > threshold
+
 public:
     explicit PureDataSource(int32_t ticksPerBuffer);
     virtual ~PureDataSource() = default;

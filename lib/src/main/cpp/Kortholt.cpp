@@ -20,7 +20,7 @@
 
 const int32_t DEFAULT_TICKS_FOR_STREAM = 8;
 const int32_t DEFAULT_TICKS = 16;
-const int32_t STREAM_BUFFER_MULTIPLIER = 2;
+const int32_t STREAM_BUFFER_MULTIPLIER = 4;
 
 Kortholt::Kortholt(std::vector<int> cpuIds, bool stream,
                    int32_t inputDeviceId, int32_t outputDeviceId) {
@@ -219,7 +219,7 @@ oboe::Result Kortholt::createPlaybackStream() {
     builder.setSharingMode(oboe::SharingMode::Exclusive)
             ->setChannelCount(oboe::ChannelCount::Stereo)
             ->setDirection(oboe::Direction::Output)  // Output for tone generation
-            ->setPerformanceMode(oboe::PerformanceMode::LowLatency)
+            ->setPerformanceMode(oboe::PerformanceMode::None)
             ->setFormat(oboe::AudioFormat::Float)
             ->setFormatConversionAllowed(true)
             ->setChannelConversionAllowed(true)
@@ -353,13 +353,16 @@ void Kortholt::start() {
     LOGD("start: Pure Data source initialized successfully");
 
     if (isStream) {
-        // Configure output callback but do NOT start the stream yet.
-        // Streams must be started AFTER the patch is opened to avoid a race
+        // Configure output callback and set a generous stream buffer.
+        // PerformanceMode::None allows the system to allocate a larger buffer
         // between libpd_process_float (audio thread) and libpd_openfile (Java thread).
         outputCallback->reset();
         outputCallback->setSource(pureDataSource);
         outputStream->setBufferSizeInFrames(bufferSize * STREAM_BUFFER_MULTIPLIER);
-        LOGD("start: Output stream configured, waiting for startStreams()");
+        LOGD("start: Output stream configured — requested buffer=%d, actual buffer=%d frames (%.1fms), waiting for startStreams()",
+             bufferSize * STREAM_BUFFER_MULTIPLIER,
+             outputStream->getBufferSizeInFrames(),
+             outputStream->getBufferSizeInFrames() * 1000.0 / outputStream->getSampleRate());
     } else {
         LOGD("start: Configured for file output (not real-time)");
     }
@@ -530,12 +533,15 @@ void Kortholt::stop() {
 
 int32_t Kortholt::calculateTicksPerBuffer() {
     // Calculate buffer size. A multiple of PdBase::blockSize (64) works best.
+    // The * 3 multiplier gives PD more frames per callback, reducing per-callback
+    // scheduling overhead and absorbing occasional processing spikes (e.g. abl_link~
+    // message storms at fast metronome tempos that can push PD processing to 4-6ms).
     auto blockSize = pd::PdBase::blockSize();
     auto framesPerBurst = oboe::DefaultStreamValues::FramesPerBurst;
     float bufferSize = framesPerBurst > blockSize
                        ? framesPerBurst
                        : blockSize * DEFAULT_TICKS_FOR_STREAM;
-    int32_t ticksPerBuffer = static_cast<int32_t>(ceil(bufferSize / blockSize)) * 2;
+    int32_t ticksPerBuffer = static_cast<int32_t>(ceil(bufferSize / blockSize)) * 3;
     return ticksPerBuffer;
 }
 
