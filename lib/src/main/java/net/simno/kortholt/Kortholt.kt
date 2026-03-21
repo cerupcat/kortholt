@@ -102,6 +102,27 @@ object Kortholt {
          */
         fun setDeviceIds(inputDeviceId: Int, outputDeviceId: Int)
 
+        /**
+         * Check if the input stream is producing digital silence.
+         * Returns true when consecutive all-zero audio callbacks exceed the
+         * configured threshold, indicating a device-specific AAudio bug.
+         */
+        fun isInputDigitalSilence(): Boolean
+
+        /**
+         * Close and reopen the input stream with a different InputPreset and/or AudioApi.
+         * The output stream, PD patch, and all state remain untouched.
+         *
+         * @param preset Oboe InputPreset ordinal value
+         * @param audioApi Oboe AudioApi ordinal value (0 = Unspecified, let Oboe choose)
+         */
+        fun reopenInputStream(preset: Int, audioApi: Int)
+
+        /**
+         * Reset silence detection counters without reopening the stream.
+         */
+        fun resetInputSilenceDetection()
+
         @ExperimentalWaveFile
         suspend fun saveWaveFile(
             outputFile: File,
