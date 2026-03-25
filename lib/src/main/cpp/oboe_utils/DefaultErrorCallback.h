@@ -67,12 +67,23 @@ public:
              oboe::convertToText(error));
 
         // Workaround for AudioRecord::isLongTimeZeroData SIGSEGV (Android 13+):
-        // Oboe calls stop() then close() during error handling. close() unmaps the
-        // shared audio buffer, but AudioRecordThread may still be inside
-        // processAudioBuffer() -> isLongTimeZeroData(). This delay (between Oboe's
-        // internal stop and the close that follows this callback) gives the thread
-        // time to exit. Same rationale as Kortholt::stopAndCloseStream.
+        // Oboe's error flow calls onErrorBeforeClose → close(). close() internally
+        // calls stop() + release() which unmaps the shared audio buffer
+        // (mCblkMemory, mBufferMemory). If AudioRecordThread is still inside
+        // processAudioBuffer() → isLongTimeZeroData() at that moment, it reads
+        // the unmapped address → SIGSEGV.
+        //
+        // The critical difference from Kortholt::stopAndCloseStream (which works
+        // correctly) is that HERE stop() has NOT been called yet — Oboe calls
+        // stop() inside close(), AFTER this callback returns. Without an explicit
+        // requestStop() the AudioRecordThread is still actively running during
+        // the sleep, and the sleep achieves nothing.
+        //
+        // Fix: call requestStop() to signal AudioRecordThread to exit its loop,
+        // THEN sleep to let it finish its current processAudioBuffer() iteration,
+        // THEN return so Oboe's close() can safely unmap the buffer.
         if (oboeStream->getDirection() == oboe::Direction::Input) {
+            oboeStream->requestStop();
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             LOGI("Input stream pre-close delay complete (isLongTimeZeroData workaround)");
         }
