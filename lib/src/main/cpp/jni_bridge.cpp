@@ -133,6 +133,42 @@ Java_net_simno_kortholt_KortholtPlayer_nativeClearRecorderCallback(
 }
 
 JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeSetReverbEnabled(
+    JNIEnv * /*unused*/,
+    jobject /*unused*/,
+    jlong kortholtHandle,
+    jboolean enabled
+) {
+    LOGD("nativeSetReverbEnabled: kortholtHandle=%lld, enabled=%d",
+         (long long)kortholtHandle, enabled);
+
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    if (kortholt != nullptr) {
+        kortholt->setReverbEnabled(enabled == JNI_TRUE);
+    } else {
+        LOGE("nativeSetReverbEnabled: null kortholt");
+    }
+}
+
+JNIEXPORT void JNICALL
+Java_net_simno_kortholt_KortholtPlayer_nativeSetReverbLevel(
+    JNIEnv * /*unused*/,
+    jobject /*unused*/,
+    jlong kortholtHandle,
+    jfloat level
+) {
+    LOGD("nativeSetReverbLevel: kortholtHandle=%lld, level=%.2f",
+         (long long)kortholtHandle, level);
+
+    auto *kortholt = reinterpret_cast<Kortholt *>(kortholtHandle);
+    if (kortholt != nullptr) {
+        kortholt->setReverbLevel(level);
+    } else {
+        LOGE("nativeSetReverbLevel: null kortholt");
+    }
+}
+
+JNIEXPORT void JNICALL
 Java_net_simno_kortholt_KortholtPlayer_nativeSetDeviceIds(
     JNIEnv * /*unused*/,
     jobject /*unused*/,

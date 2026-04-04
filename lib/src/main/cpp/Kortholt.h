@@ -73,6 +73,10 @@ public:
     void setRecorderCallback(class AudioRecorderCallback *callback);
     void clearRecorderCallback();
 
+    // Reverb effect control for recording
+    void setReverbEnabled(bool enabled);
+    void setReverbLevel(float level);
+
     /**
      * Check if the input stream is producing digital silence.
      * Delegates to PureDataInputSource with the configured thresholds.

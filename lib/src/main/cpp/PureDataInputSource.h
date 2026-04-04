@@ -7,6 +7,7 @@
 #include <array>
 #include "LockFreeRingBuffer.h"
 #include "AudioRecorderCallback.h"
+#include "ReverbEffect.h"
 
 // Include libpd C headers for global functions
 extern "C" {
@@ -56,6 +57,9 @@ private:
 
     // Optional recorder callback (atomic pointer for thread-safe updates)
     std::atomic<AudioRecorderCallback*> recorderCallback_{nullptr};
+
+    // Reverb effect for recording (owned, initialized with sample rate)
+    std::unique_ptr<ReverbEffect> reverbEffect_;
 
 public:
     explicit PureDataInputSource(int32_t ticksPerBuffer);
@@ -151,6 +155,26 @@ public:
      */
     void setRecorderCallback(AudioRecorderCallback* callback) {
         recorderCallback_.store(callback, std::memory_order_release);
+    }
+
+    /**
+     * Set reverb enabled state for recording.
+     * Safe to call from any thread.
+     */
+    void setReverbEnabled(bool enabled) {
+        if (reverbEffect_) {
+            reverbEffect_->setEnabled(enabled);
+        }
+    }
+
+    /**
+     * Set reverb level for recording (0.0 to 1.0).
+     * Safe to call from any thread.
+     */
+    void setReverbLevel(float level) {
+        if (reverbEffect_) {
+            reverbEffect_->setLevel(level);
+        }
     }
 
 private:

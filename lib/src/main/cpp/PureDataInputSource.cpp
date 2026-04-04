@@ -81,6 +81,10 @@ bool PureDataInputSource::init(int32_t sampleRate, int32_t channelCount) {
     // Reset statistics
     resetStatistics();
 
+    // Initialize reverb effect with the stream's sample rate
+    reverbEffect_ = std::make_unique<ReverbEffect>();
+    reverbEffect_->setSampleRate(sampleRate);
+
     // Mark as initialized (this must be last)
     initialized_.store(true, std::memory_order_release);
 
@@ -101,12 +105,6 @@ void PureDataInputSource::renderAudio(float *audioData, int32_t numFrames) {
         return;
     }
 
-    // Forward audio data to recorder if one is attached
-    AudioRecorderCallback* recorder = recorderCallback_.load(std::memory_order_acquire);
-    if (recorder != nullptr) {
-        recorder->onAudioData(audioData, numFrames, channels);
-    }
-
     // Update statistics
     totalFramesReceived_.fetch_add(numFrames, std::memory_order_relaxed);
     totalInputCallbacks_.fetch_add(1, std::memory_order_relaxed);
@@ -119,7 +117,9 @@ void PureDataInputSource::renderAudio(float *audioData, int32_t numFrames) {
         droppedFrames_.fetch_add(numFrames - framesToProcess, std::memory_order_relaxed);
     }
 
-    // Write interleaved audio data to per-channel ring buffers
+    // Write interleaved audio data to per-channel ring buffers.
+    // This MUST happen BEFORE the reverb+recorder block below so that PD pitch
+    // detection always sees raw, unprocessed mic audio.
     size_t totalDropped = 0;
     bool allZero = true;
 
@@ -148,6 +148,20 @@ void PureDataInputSource::renderAudio(float *audioData, int32_t numFrames) {
         consecutiveZeroCallbacks_.fetch_add(1, std::memory_order_relaxed);
     } else {
         consecutiveZeroCallbacks_.store(0, std::memory_order_relaxed);
+    }
+
+    // Forward audio data to recorder if one is attached.
+    // This runs AFTER the ring buffer write so that reverb (which modifies
+    // audioData in-place) only affects the recorded WAV file, not pitch detection.
+    AudioRecorderCallback* recorder = recorderCallback_.load(std::memory_order_acquire);
+    if (recorder != nullptr) {
+        // Apply reverb effect to recording audio (in-place, before writing to WAV).
+        // This only affects the recorded file — the ring buffer write for PD pitch
+        // detection happens above, so pitch detection sees raw mic audio.
+        if (reverbEffect_) {
+            reverbEffect_->process(audioData, numFrames, channels);
+        }
+        recorder->onAudioData(audioData, numFrames, channels);
     }
 }
 

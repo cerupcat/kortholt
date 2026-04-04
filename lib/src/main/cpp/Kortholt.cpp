@@ -648,6 +648,24 @@ void Kortholt::clearRecorderCallback() {
     }
 }
 
+void Kortholt::setReverbEnabled(bool enabled) {
+    LOGD("setReverbEnabled: %s", enabled ? "true" : "false");
+    if (pureDataInputSource) {
+        pureDataInputSource->setReverbEnabled(enabled);
+    } else {
+        LOGE("setReverbEnabled: pureDataInputSource is null");
+    }
+}
+
+void Kortholt::setReverbLevel(float level) {
+    LOGD("setReverbLevel: %.2f", level);
+    if (pureDataInputSource) {
+        pureDataInputSource->setReverbLevel(level);
+    } else {
+        LOGE("setReverbLevel: pureDataInputSource is null");
+    }
+}
+
 int32_t Kortholt::getStreamSampleRate() const {
     std::lock_guard<std::mutex> lock(streamLock);
     if (outputStream) {
