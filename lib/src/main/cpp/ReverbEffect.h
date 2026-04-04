@@ -21,21 +21,25 @@
 class ReverbEffect {
 public:
     ReverbEffect() {
-        // Set sensible defaults for the plate reverb
-        reverb_.setSize(0.5f);       // Medium room
-        reverb_.setPredelay(0.01f);  // 10ms predelay
-        reverb_.setLowpass(8000.0f); // Gentle high-frequency rolloff
-        // Other params set by setLevel()
-        setLevel(0.3f);  // Match default preference
+        // Don't configure PlateReverb parameters here — its delay lines
+        // aren't allocated until setSampleRate() is called. Any calls to
+        // setSize/setDamping/etc. before that will dereference null pointers.
     }
 
     /**
      * Initialize with sample rate. Must be called before process().
      * NOT real-time safe (allocates internally).
+     * Also sets default reverb parameters (only safe after delay lines exist).
      */
     void setSampleRate(int32_t sampleRate) {
         REVERB_LOGD("setSampleRate: %d", sampleRate);
         reverb_.setSampleRate(static_cast<float>(sampleRate));
+
+        // Now that delay lines are allocated, set default parameters
+        reverb_.setSize(0.5f);       // Medium room
+        reverb_.setPredelay(0.01f);  // 10ms predelay
+        reverb_.setLowpass(8000.0f); // Gentle high-frequency rolloff
+        setLevel(level_.load(std::memory_order_acquire));  // Apply default level mapping
     }
 
     /**
