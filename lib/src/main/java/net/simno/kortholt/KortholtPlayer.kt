@@ -271,6 +271,26 @@ internal class KortholtPlayer @Inject constructor(
         }
     }
 
+    override fun setReverbEnabled(enabled: Boolean) {
+        android.util.Log.d("KortholtPlayer", "Setting reverb enabled: $enabled")
+        val handle = kortholtHandle.get()
+        if (handle != NOT_SET) {
+            nativeSetReverbEnabled(handle, enabled)
+        } else {
+            android.util.Log.w("KortholtPlayer", "Cannot set reverb enabled: stream not started")
+        }
+    }
+
+    override fun setReverbLevel(level: Float) {
+        android.util.Log.d("KortholtPlayer", "Setting reverb level: $level")
+        val handle = kortholtHandle.get()
+        if (handle != NOT_SET) {
+            nativeSetReverbLevel(handle, level)
+        } else {
+            android.util.Log.w("KortholtPlayer", "Cannot set reverb level: stream not started")
+        }
+    }
+
     override fun getStreamSampleRate(): Int {
         val handle = kortholtHandle.get()
         if (handle != NOT_SET) {
@@ -387,6 +407,8 @@ internal class KortholtPlayer @Inject constructor(
     private external fun nativeIsInputDigitalSilence(kortholtHandle: Long): Boolean
     private external fun nativeReopenInputStream(kortholtHandle: Long, preset: Int, audioApi: Int)
     private external fun nativeResetInputSilenceDetection(kortholtHandle: Long)
+    private external fun nativeSetReverbEnabled(kortholtHandle: Long, enabled: Boolean)
+    private external fun nativeSetReverbLevel(kortholtHandle: Long, level: Float)
     private external fun nativeSaveWaveFile(
         kortholtHandle: Long,
         fileName: String,

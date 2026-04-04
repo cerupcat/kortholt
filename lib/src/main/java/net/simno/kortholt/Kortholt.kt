@@ -85,6 +85,10 @@ object Kortholt {
         fun setRecorderCallback(recorderHandle: Long)
         fun clearRecorderCallback()
 
+        // Reverb effect control for recording
+        fun setReverbEnabled(enabled: Boolean)
+        fun setReverbLevel(level: Float)
+
         /**
          * Get the sample rate of the active output stream.
          * This is the rate at which PureData and audio recording operate.
