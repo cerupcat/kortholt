@@ -53,7 +53,7 @@ public:
      * Safe to call from any thread.
      */
     void setLevel(float level) {
-        level = std::clamp(level, 0.0f, 1.0f);
+        level = std::max(0.0f, std::min(level, 1.0f));
         REVERB_LOGD("setLevel: %.2f", level);
         level_.store(level, std::memory_order_release);
 
