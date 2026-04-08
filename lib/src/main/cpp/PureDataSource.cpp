@@ -420,23 +420,51 @@ bool PureDataSource::processAudio(float *inputData, float *outputData, int32_t n
 }
 
 void PureDataSource::deinit() {
+    // Convenience method that performs both teardown phases.
+    // Only safe when no Oboe streams are running (i.e. no audio callback
+    // thread is inside libpd_process_float concurrently).
+    suspendAudioCallback();
+    disableDsp();
+    LOGD("deinit: Complete");
+}
+
+void PureDataSource::suspendAudioCallback() {
     if (!initialized_.load(std::memory_order_acquire)) {
-        LOGD("deinit: Already deinitialized");
+        LOGD("suspendAudioCallback: Already suspended");
         return;
     }
 
-    // Mark as uninitialized FIRST so the audio callback outputs silence
-    // instead of calling libpd_process_float() during teardown.
+    // Atomically mark as uninitialized so the audio callback outputs silence
+    // instead of calling libpd_process_float(). This is lock-free and safe
+    // to call while the audio thread is still running — it just prevents
+    // future callbacks from entering Pure Data.
     initialized_.store(false, std::memory_order_release);
+    LOGD("suspendAudioCallback: Audio callback will output silence");
+}
 
-    // Turn off DSP to stop Pure Data's internal scheduler and prevent
-    // message dispatch recursion during patch close / reinit.
-    LOGD("deinit: Disabling DSP");
+void PureDataSource::resumeAudioCallback() {
+    if (initialized_.load(std::memory_order_acquire)) {
+        LOGD("resumeAudioCallback: Already active");
+        return;
+    }
+
+    // Re-enable the audio callback to process through Pure Data.
+    // Only call when PD state is valid and new Oboe streams are ready.
+    initialized_.store(true, std::memory_order_release);
+    LOGD("resumeAudioCallback: Audio callback re-enabled");
+}
+
+void PureDataSource::disableDsp() {
+    // Send "dsp 0" to Pure Data's internal scheduler.
+    // WARNING: This enters PD's message dispatch system. It MUST NOT be
+    // called while any other thread is inside libpd (e.g. the audio
+    // callback calling libpd_process_float). Ensure Oboe streams are
+    // fully stopped before calling this.
+    LOGD("disableDsp: Sending dsp 0 to Pure Data");
     libpd_start_message(1);
     libpd_add_float(0.0f);
     libpd_finish_message("pd", "dsp");
-
-    LOGD("deinit: Complete");
+    LOGD("disableDsp: DSP disabled");
 }
 
 void PureDataSource::sendFloat(const char *dest, float value) {

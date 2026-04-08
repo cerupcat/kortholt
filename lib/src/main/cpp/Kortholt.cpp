@@ -92,10 +92,34 @@ void Kortholt::restart() {
     bool hadInput = mInputEnabled;
     LOGD("restart: hadInput=%s", hadInput ? "true" : "false");
 
-    // Stop existing streams without re-initializing Pure Data.
-    // PD state (patch, DSP, receivers) persists — we only need new Oboe streams
-    // pointed at the (possibly new) device IDs.
-    stop();
+    // Stop existing Oboe streams WITHOUT touching Pure Data state.
+    // PD state (DSP, patches, receivers, externals) persists across stream
+    // restarts — we only need new Oboe streams pointed at the (possibly new)
+    // device IDs.
+    //
+    // We do NOT call stop() here because stop() disables DSP via
+    // disableDsp(). Instead we use the two-phase approach:
+    //   1. suspendAudioCallback() — prevents audio callback from entering PD
+    //   2. Stop streams — blocks until in-flight callbacks complete
+    //   3. Create new streams
+    //   4. resumeAudioCallback() — re-enables PD processing
+    //   5. Start new streams
+    {
+        std::lock_guard<std::mutex> lock(streamLock);
+
+        // Phase 1: Suspend audio callback (lock-free, safe while streams run)
+        if (pureDataSource) {
+            pureDataSource->suspendAudioCallback();
+        }
+
+        // Phase 2: Stop and close existing streams
+        stopAndCloseStream(outputStream, "output");
+        stopAndCloseStream(inputStream, "input");
+
+        // Retire old streams for Oboe cleanup
+        if (outputStream) mRetiredStreams.push_back(std::move(outputStream));
+        if (inputStream) mRetiredStreams.push_back(std::move(inputStream));
+    }
 
     // Recreate the output stream with current device IDs
     {
@@ -104,6 +128,7 @@ void Kortholt::restart() {
         if (outputResult != oboe::Result::OK) {
             LOGE("restart: Failed to recreate output stream: %s",
                  oboe::convertToText(outputResult));
+            mRestarting.store(false, std::memory_order_release);
             return;
         }
 
@@ -111,6 +136,14 @@ void Kortholt::restart() {
             outputCallback->reset();
             outputCallback->setSource(pureDataSource);
             outputStream->setBufferSizeInFrames(bufferSize * STREAM_BUFFER_MULTIPLIER);
+        }
+
+        // Phase 3: Re-enable audio callback before starting streams.
+        // PD state is intact (DSP still on, patch still loaded), and
+        // the new stream is configured but not yet started, so no
+        // audio callback will fire until startStreams() below.
+        if (pureDataSource) {
+            pureDataSource->resumeAudioCallback();
         }
     }
 
@@ -391,7 +424,12 @@ void Kortholt::startStreams() {
 bool Kortholt::openAndStartInputStream(const char *label) {
     // Close existing input stream if any
     stopAndCloseStream(inputStream, "input");
-    inputStream.reset();
+
+    // Retire the old stream to keep it alive while Oboe error callback
+    // threads may still hold a raw pointer to it. Without this, an error
+    // callback spawned just before stopAndCloseStream would access freed
+    // memory (same pattern as Kortholt::stop() and Oboe bug #2325).
+    if (inputStream) mRetiredStreams.push_back(std::move(inputStream));
 
     // Create the recording stream with current mInputPreset/mInputAudioApi
     auto inputResult = createRecordingStream();
@@ -512,16 +550,28 @@ void Kortholt::stop() {
     std::lock_guard<std::mutex> lock(streamLock);
     LOGD("stop: Stopping Kortholt");
 
-    // Disable DSP and mark PureDataSource as uninitialized BEFORE stopping
-    // streams. This prevents libpd from processing messages (which can
-    // recurse infinitely through corrupted dispatch chains) while the audio
-    // streams are being torn down.
+    // === Two-phase PureDataSource teardown ===
+    //
+    // Phase 1: Atomically prevent the audio callback from entering
+    // libpd_process_float(). This is lock-free and safe to call while
+    // the Oboe audio thread is still running. Any in-flight callback
+    // that has already passed the initialized_ check will complete
+    // naturally; subsequent callbacks will output silence.
     if (pureDataSource) {
-        pureDataSource->deinit();
+        pureDataSource->suspendAudioCallback();
     }
 
+    // Stop and close Oboe streams. Oboe's stop() blocks until the
+    // current audio callback completes, guaranteeing that no thread
+    // is inside libpd_process_float() after this returns.
     stopAndCloseStream(outputStream, "output");
     stopAndCloseStream(inputStream, "input");
+
+    // Phase 2: Now safe to send messages to PD — no concurrent access.
+    // Disable DSP to stop PD's internal scheduler (metros, delays).
+    if (pureDataSource) {
+        pureDataSource->disableDsp();
+    }
 
     // Workaround for Oboe bug google/oboe#2325:
     // Don't destroy streams immediately — retire them to keep FilterAudioStream

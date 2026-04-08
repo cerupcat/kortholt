@@ -111,10 +111,40 @@ public:
 
     /**
      * Disable DSP and mark as uninitialized.
-     * Must be called BEFORE stopping audio streams to prevent libpd from
-     * processing messages into a partially-torn-down DSP graph.
+     * Two-phase teardown for thread safety:
+     *   Phase 1: suspendAudioCallback() — atomically prevents the audio callback
+     *            from calling libpd_process_float(). Lock-free, safe to call
+     *            while the audio thread is running.
+     *   Phase 2: disableDsp() — sends "dsp 0" message to Pure Data. This enters
+     *            PD's message dispatch system and MUST NOT be called while any
+     *            other thread is inside libpd (e.g. libpd_process_float).
+     *            Call only AFTER stopping Oboe streams.
+     *
+     * deinit() is a convenience that performs both phases. Only safe when no
+     * audio streams are running.
      */
     void deinit();
+
+    /**
+     * Phase 1: Atomically mark as uninitialized so the audio callback
+     * outputs silence instead of calling libpd_process_float().
+     * Lock-free — safe to call from any thread, even while audio is running.
+     */
+    void suspendAudioCallback();
+
+    /**
+     * Re-enable the audio callback after a stream restart.
+     * Only call when PD state (DSP, patches, receivers) is still valid
+     * and new Oboe streams are ready.
+     */
+    void resumeAudioCallback();
+
+    /**
+     * Phase 2: Send "dsp 0" to Pure Data's internal scheduler.
+     * MUST only be called when no other thread is inside libpd
+     * (i.e., after Oboe streams have been stopped and closed).
+     */
+    void disableDsp();
 
     /**
      * Check if initialized

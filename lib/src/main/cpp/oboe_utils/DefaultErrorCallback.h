@@ -82,9 +82,19 @@ public:
         // Fix: call requestStop() to signal AudioRecordThread to exit its loop,
         // THEN sleep to let it finish its current processAudioBuffer() iteration,
         // THEN return so Oboe's close() can safely unmap the buffer.
+        //
+        // IMPORTANT: We use 200ms here (vs 50ms in Kortholt::stopAndCloseStream)
+        // because requestStop() is non-blocking and may NOT interrupt the
+        // AudioRecordThread's blocking obtainBuffer() call. In the normal
+        // teardown path, the blocking stop() calls AudioRecord::stop() which
+        // calls mProxy->interrupt() to wake the thread immediately. Here,
+        // requestStop() only sets mActive=false — the thread won't check that
+        // flag until obtainBuffer() times out (up to ~200ms on the legacy
+        // AudioRecord path). We can't use the blocking stop() here because it
+        // could deadlock with Oboe's error handling thread.
         if (oboeStream->getDirection() == oboe::Direction::Input) {
             oboeStream->requestStop();
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            std::this_thread::sleep_for(std::chrono::milliseconds(200));
             LOGI("Input stream pre-close delay complete (isLongTimeZeroData workaround)");
         }
     }
